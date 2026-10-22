@@ -1,0 +1,21 @@
+# docker compose -f docker-compose.yml up -d --build : Build the image and run the container (existing unused images must be deleted separately)
+# docker-compose -f docker-compose.yml up -d : If no image exists, build and run the container; if an image exists, run the container directly without building
+# If "Docker Desktop (local/PC environment)" or "Docker Daemon (server/Linux environment)" is not installed/configured, run main directly via uvicorn locally
+
+# version: "3.9"
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8008:8008"
+    volumes:
+      - dockervenv:/app/.venv
+      - .:/app # Mount the local project directory to the container's '/app'
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+
+volumes:
+  dockervenv:

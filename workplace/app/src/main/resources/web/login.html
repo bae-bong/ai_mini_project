@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Login</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+<div class="container">
+  <h1>Login</h1>
+
+  <!-- ✅ Keep the form, but JS intercepts submit and processes via fetch -->
+  <form id="loginForm" method="POST" action="/api/login">
+    <label>Username
+      <input type="text" name="username" required autocomplete="username">
+    </label>
+    <label>Password
+      <input type="password" name="password" required autocomplete="current-password">
+    </label>
+
+    <button type="submit">Login</button>
+  </form>
+
+  <p id="msg" style="color:#c00; margin-top:10px;"></p>
+
+  <p>Don't have an account yet? <a href="/signup">Sign Up</a></p>
+</div>
+
+<script>
+(function () {
+  const form = document.getElementById("loginForm");
+  const msg = document.getElementById("msg");
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    msg.textContent = "";
+
+    const fd = new FormData(form);
+    const body = new URLSearchParams();
+    for (const [k, v] of fd.entries()) body.append(k, v);
+
+    try {
+      const res = await fetch("/api/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body,
+        credentials: "include",
+      });
+
+      const data = await res.json().catch(() => null);
+
+      if (!res.ok) {
+        msg.textContent = (data && data.error) ? data.error : ("Login error (HTTP " + res.status + ")");
+        return;
+      }
+
+      // ✅ On success, navigate (use redirect provided by server)
+      const target = (data && data.redirect) ? data.redirect : "http://localhost:8008/index.html";
+      window.location.href = target;
+    } catch (err) {
+      console.error(err);
+      msg.textContent = "Login failed due to a network error.";
+    }
+  });
+})();
+</script>
+
+<!-- Recommended to remove app.js as it may interfere with redirect -->
+<!-- <script src="/static/app.js"></script> -->
+</body>
+</html>

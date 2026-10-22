@@ -1,0 +1,17 @@
+.venv/
+venv/
+__pycache__/
+*.pyc
+.env
+*.env
+.DS_Store
+.gradle/
+build/
+.idea/
+.vscode/
+uploads/
+*.mp3
+*.wav
+*.webm
+faiss_db/
+bin/

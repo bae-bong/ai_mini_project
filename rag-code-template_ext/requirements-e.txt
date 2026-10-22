@@ -1,0 +1,44 @@
+# 외부 "rag_external-web_pdf_closed_llm" 노드/컨테이너 패키지 설치
+
+# pip install -U pip setuptools wheel
+# pip install -r requirements-e.txt
+
+# Web / API
+fastapi>=0.110,<1.0
+uvicorn[standard]>=0.29,<1.0
+pydantic>=2.11,<3.0
+python-dotenv>=1.0
+httpx>=0.27,<1.0
+orjson>=3.9
+python-multipart>=0.0.9
+aiofiles>=23.2
+
+# Async / Utils
+pandas>=2.1
+nest_asyncio>=1.6
+aiohttp>=3.9
+beautifulsoup4>=4.12
+
+# DB (Async)
+sqlalchemy>=2.0,<3.0
+aiomysql>=0.2
+pymysql>=1.1
+aiosqlite>=0.19
+greenlet>=3.0
+
+# Vector DB
+faiss-cpu>=1.7
+
+# PDF
+pypdf>=4.0
+
+# LangChain (1.x 통일)
+langchain==1.2.7
+langchain-community==0.4.1
+langchain-core>=1.2.7,<2.0
+langchain-text-splitters>=1.1.0
+
+# OpenAI + LangChain OpenAI (중요: 1.x 사용)
+langchain-openai==1.1.7
+openai==1.109.1
+tiktoken>=0.7,<1.0

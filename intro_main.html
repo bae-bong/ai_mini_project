@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RAG Pipeline API App</title>
+  <style>
+    :root{
+      --bg:#05080c; --panel:#0b0f15; --line:#1a2635;
+      --ink:#e6edf3; --muted:#9fb0c0;
+      --brand:#3ca3ff; --brand-glow:#6ec8ff;
+    }
+    *{box-sizing:border-box;}
+    html,body{height:100%;margin:0;padding:0;font-family:ui-sans-serif,system-ui,AppleSDGothicNeo,Segoe UI,Roboto,Helvetica,Arial;}
+    body{
+      background:radial-gradient(circle at 30% 20%, #07101a 0%, #02060a 100%);
+      color:var(--ink);
+      display:flex; flex-direction:column; align-items:center; justify-content:center;
+      text-align:center;
+    }
+
+    h1{
+      font-size:36px; /* original 28px → approx 130% enlarged */
+      font-weight:700;
+      letter-spacing:1px;
+      margin-bottom:30px;
+      color:var(--brand);
+      text-shadow:0 0 16px rgba(108,195,255,0.3);
+    }
+
+    .dock{
+      display:flex;
+      flex-wrap:wrap;
+      justify-content:center;
+      gap:40px;
+      margin-bottom:60px;
+    }
+
+    .card{
+      width:260px;
+      background:var(--panel);
+      border:1px solid var(--line);
+      border-radius:14px;
+      padding:24px;
+      box-shadow:0 8px 24px rgba(0,0,0,0.35);
+      transition:transform 0.2s ease, box-shadow 0.3s ease;
+      text-decoration:none;
+      color:var(--ink);
+      min-height:140px;
+    }
+    .card:hover{
+      transform:translateY(-4px);
+      box-shadow:0 10px 28px rgba(61,142,255,0.35);
+    }
+    .card:active{ transform:translateY(0); }
+
+    .card h2{
+      font-size:18px;
+      font-weight:700;
+      margin-bottom:8px;
+      color:var(--brand-glow);
+    }
+
+    .card p{
+      font-size:13px;
+      color:var(--muted);
+      line-height:1.5;
+    }
+
+    footer{
+      position:fixed;
+      bottom:20px;
+      text-align:center;
+      width:100%;
+      color:var(--muted);
+      font-size:12px;
+      letter-spacing:.4px;
+      padding:0 10px;
+    }
+
+    footer .slogan{
+      font-style:italic;
+      color:var(--brand-glow);
+      font-size:13px;
+    }
+
+    /* -------- Responsive patch area -------- */
+    @media (max-width: 900px){
+      h1{ font-size:30px; }
+      .card{ width:320px; }
+    }
+    @media (max-width: 720px){
+      .dock{ gap:28px; margin-bottom:44px; }
+      .card{ width:92%; padding:22px; }
+      .card h2{ font-size:17px; }
+      .card p{ font-size:14px; line-height:1.6; }
+    }
+    @media (max-width: 420px){
+      body{ padding:18px 10px 72px; }   /* Ensure screen edge margin */
+      h1{ font-size:26px; margin-bottom:20px; }
+      .dock{ gap:20px; }
+      .card{ width:100%; padding:20px; border-radius:12px; }
+      .card h2{ font-size:16px; }
+      .card p{ font-size:13px; }
+      footer{ bottom:12px; padding:0 10px; }
+    }
+
+    /* Account for iPhone notch and safe areas */
+    @supports(padding:max(env(safe-area-inset-bottom), 0px)){
+      body{ padding-bottom:calc(40px + env(safe-area-inset-bottom)); }
+      footer{ bottom:calc(12px + env(safe-area-inset-bottom)); }
+    }
+  </style>
+</head>
+<body>
+  <h1>RAG Pipeline API App</h1>
+
+  <div class="dock">
+    <a href="external_index.html" class="card">
+      <h2>Closed-Source LLM Console</h2>
+      <p>Runs a closed-source LLM based RAG pipeline<br>combined with external vector data.</p>
+    </a>
+    <a href="internal_index.html" class="card">
+      <h2>Open-Weight LLM Console</h2>
+      <p>Manages an internal vector/DB based RAG system<br>utilizing an open-weight LLM.</p>
+    </a>
+  </div>
+
+  <footer>
+    <div class="slogan">RAG Sense, Spirit Beyond. The RAG spirit is understood, not spoken.</div>
+  </footer>
+</body>
+<!--
+#### This practice code is for learning purposes only. audit@korea.ac.kr Sung-Ryel Lim Ph.D.
+python -m http.server 5174
+http://localhost:5174/intro_main.html
+# 
+-->
+</html>

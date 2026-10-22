@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Whisper STT Demo</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    :root {
+      --bg: #f3f4f6;
+      --card-bg: #ffffff;
+      --text-main: #111827;
+      --text-muted: #6b7280;
+      --primary: #2563eb;
+      --primary-soft: #e0ecff;
+      --border-subtle: #e5e7eb;
+      --danger: #dc2626;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui,
+        sans-serif;
+      background: radial-gradient(circle at top, #e0edff 0, var(--bg) 45%);
+      color: var(--text-main);
+    }
+
+    .page {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 32px 16px;
+    }
+
+    .card {
+      width: 100%;
+      max-width: 720px;
+      background: var(--card-bg);
+      border-radius: 20px;
+      box-shadow: 0 22px 50px rgba(15, 23, 42, 0.12);
+      padding: 24px 22px 22px;
+      border: 1px solid var(--border-subtle);
+    }
+
+    header {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+      margin-bottom: 16px;
+    }
+
+    .title {
+      font-size: 22px;
+      font-weight: 700;
+    }
+
+    .subtitle {
+      font-size: 13px;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+
+    nav {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      font-size: 12px;
+    }
+
+    nav a {
+      text-decoration: none;
+      color: var(--text-muted);
+      padding: 4px 10px;
+      border-radius: 999px;
+      border: 1px solid transparent;
+    }
+
+    nav a:hover {
+      background: var(--primary-soft);
+      color: var(--primary);
+      border-color: #bfd4ff;
+    }
+
+    nav a.active {
+      background: var(--primary);
+      color: white;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 8px 16px;
+      border-radius: 999px;
+      border: none;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+      margin-top: 8px;
+      background: var(--primary);
+      color: white;
+      min-width: 140px;
+    }
+
+    .btn.recording {
+      background: var(--danger);
+    }
+
+    .status {
+      margin-top: 8px;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .output-box {
+      margin-top: 18px;
+      padding: 12px 10px;
+      border-radius: 12px;
+      background: #f9fafb;
+      border: 1px dashed var(--border-subtle);
+      font-size: 14px;
+      min-height: 72px;
+      white-space: pre-wrap;
+    }
+
+    .output-label {
+      font-size: 12px;
+      font-weight: 600;
+      margin-bottom: 4px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    footer {
+      margin-top: 14px;
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    @media (max-width: 640px) {
+      .card {
+        padding: 18px 16px 16px;
+      }
+
+      header {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+
+      .title {
+        font-size: 18px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div class="card">
+      <header>
+        <div>
+          <div class="title">🎙 Whisper STT Demo</div>
+          <div class="subtitle">
+            Record voice via microphone in the browser and send it to the <code>/stt/</code> endpoint
+            to convert it to text.
+          </div>
+        </div>
+        <nav>
+          <a href="index.html">Home</a>
+          <a href="stt.html" class="active">STT</a>
+          <a href="tts.html">TTS</a>
+          <a href="stt-tts.html">STT→GPT→TTS</a>
+        </nav>
+      </header>
+
+      <main>
+        <button id="recordBtn" class="btn">🎧 Start Recording</button>
+        <div id="recordStatus" class="status">
+          Press the button to start recording. Press again to stop.
+        </div>
+
+        <section style="margin-top:18px;">
+          <div class="output-label">RECOGNIZED TEXT</div>
+          <div id="text" class="output-box">
+            No recognized text yet.
+          </div>
+        </section>
+      </main>
+
+      <footer>
+        STT processing is performed by the Whisper backend on the server, and the <code>text</code> or
+        <code>error</code> field from the response JSON is displayed as-is.
+      </footer>
+    </div>
+  </div>
+
+  <script>
+    let isRecording = false;
+    let mediaRecorder;
+    let audioChunks = [];
+
+    const btn = document.getElementById("recordBtn");
+    const textEl = document.getElementById("text");
+    const statusEl = document.getElementById("recordStatus");
+
+    btn.addEventListener("click", async () => {
+      if (!isRecording) {
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          mediaRecorder = new MediaRecorder(stream);
+          audioChunks = [];
+
+          mediaRecorder.ondataavailable = (e) => audioChunks.push(e.data);
+
+          mediaRecorder.onstop = async () => {
+            statusEl.textContent = "Sending audio to server...";
+            const blob = new Blob(audioChunks, { type: "audio/webm" });
+            const formData = new FormData();
+            formData.append("audio", blob, "recording.webm");
+
+            try {
+              const res = await fetch("/stt/", {
+                method: "POST",
+                body: formData,
+              });
+
+              const data = await res.json();
+              textEl.textContent =
+                data.text || data.error || "No text recognized.";
+            } catch (err) {
+              textEl.textContent = "An error occurred during the request.";
+            } finally {
+              statusEl.textContent = "Recording complete. Press the button to record again.";
+            }
+          };
+
+          mediaRecorder.start();
+          isRecording = true;
+          btn.textContent = "■ Stop Recording";
+          btn.classList.add("recording");
+          statusEl.textContent = "Recording...";
+        } catch (err) {
+          statusEl.textContent = "Please allow microphone permission.";
+        }
+      } else {
+        mediaRecorder.stop();
+        isRecording = false;
+        btn.textContent = "🎧 Start Recording";
+        btn.classList.remove("recording");
+      }
+    });
+  </script>
+</body>
+</html>
+```

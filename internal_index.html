@@ -1,0 +1,384 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>RAG Based Open-Weight LLM API Console</title>
+  <style>
+    :root{
+      --bg:#0b0e11; --panel:#12161c; --ink:#e6edf3; --muted:#9fb0c0;
+      --brand:#5dd3ff; --ok:#2ecc71; --warn:#f39c12; --err:#e74c3c; --line:#1e2732;
+      --accent:#8ad6ff;
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%}
+    body{
+      margin:0; font-family:ui-sans-serif,system-ui,AppleSDGothicNeo,"Apple Color Emoji",Segoe UI,Roboto,Helvetica,Arial;
+      background:linear-gradient(180deg,#0b0e11 0%,#0c1117 100%);
+      color:var(--ink);
+    }
+    header{
+      position:sticky; top:0; z-index:10; backdrop-filter:saturate(1.2) blur(6px);
+      background:rgba(11,14,17,.7); border-bottom:1px solid var(--line);
+    }
+    .wrap{max-width:1100px; margin:0 auto; padding:24px}
+    .brand{
+      display:flex; align-items:center; gap:12px; padding:16px 0;
+    }
+    .brand .dot{
+      width:12px; height:12px; border-radius:50%; background:var(--brand);
+      box-shadow:0 0 16px var(--brand);
+    }
+    .brand h1{font-size:20px; margin:0; font-weight:700; letter-spacing:.2px}
+    .grid{
+      display:grid; gap:16px; grid-template-columns:repeat(12,1fr);
+    }
+    .panel{
+      grid-column:span 12;
+      background:var(--panel); border:1px solid var(--line);
+      border-radius:14px; padding:16px 16px 18px;
+      box-shadow:0 6px 24px rgba(0,0,0,.25);
+    }
+    @media (min-width:980px){
+      .col-6{grid-column:span 6}
+      .col-4{grid-column:span 4}
+      .col-8{grid-column:span 8}
+    }
+    h2{
+      margin:0 0 12px; font-size:16px; font-weight:700;
+      display:flex; align-items:center; gap:10px;
+    }
+    h2 .tag{font-size:11px; padding:2px 8px; border-radius:999px; border:1px solid var(--line); color:var(--muted)}
+    p.desc{margin:6px 0 14px; color:var(--muted); font-size:13px; line-height:1.5}
+    .row{display:flex; gap:12px; flex-wrap:wrap}
+    label{display:block; font-size:12px; color:var(--muted); margin-bottom:6px}
+    input[type="text"], input[type="number"], textarea, select{
+      width:100%; background:#0e1218; color:var(--ink); border:1px solid var(--line); border-radius:10px;
+      padding:10px 12px; font-size:14px; outline:none;
+    }
+    textarea{min-height:96px; resize:vertical}
+    .btn{
+      appearance:none; border:none; background:linear-gradient(180deg,#1e90ff,#0077ff);
+      color:white; padding:10px 14px; border-radius:10px; font-weight:700; cursor:pointer;
+      transition:transform .04s ease, filter .2s ease; box-shadow:0 6px 16px rgba(0,119,255,.3)
+    }
+    .btn.secondary{background:#19202a; color:var(--ink); border:1px solid var(--line); box-shadow:none}
+    .btn:active{transform:translateY(1px)}
+    .btn[disabled]{opacity:.55; cursor:not-allowed; filter:grayscale(40%)}
+    .kpi{
+      display:flex; gap:14px; flex-wrap:wrap; margin-top:6px
+    }
+    .pill{
+      font-size:12px; padding:6px 10px; border-radius:999px; border:1px solid var(--line); color:var(--muted);
+      background:#0e141b;
+    }
+    .ok{color:var(--ok)} .warn{color:var(--warn)} .err{color:var(--err)}
+    pre.code{
+      margin:10px 0 0; background:#0b1016; border:1px solid var(--line); border-radius:10px;
+      padding:12px; overflow:auto; font-size:13px; line-height:1.5;
+    }
+    .list{
+      display:grid; gap:8px; margin-top:8px
+    }
+    .item{
+      background:#0b1118; border:1px solid var(--line); border-radius:10px; padding:10px 12px; font-size:13px;
+      display:flex; justify-content:space-between; align-items:center; gap:10px;
+    }
+    .muted{color:var(--muted)}
+    .hl{color:var(--accent)}
+    footer{color:var(--muted); font-size:12px; padding:24px 0 40px}
+    .inline{display:flex; align-items:center; gap:10px}
+    .checkbox{display:flex; align-items:center; gap:8px; color:var(--muted); font-size:13px}
+    hr.sep{border:0; border-top:1px dashed var(--line); margin:12px 0}
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap brand">
+      <div class="dot"></div>
+      <h1>RAG Based Open Weight LLM API Console</h1>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <div id="app" class="grid">
+
+      <!-- Status / Health -->
+      <section class="panel col-6">
+        <h2>Service Status <span class="tag">/health, /status</span></h2>
+        <p class="desc">Check health status and index/cache information.</p>
+        <div class="row">
+          <button class="btn" @click="checkHealth" :disabled="loading.health">Health Check</button>
+          <button class="btn secondary" @click="getStatus" :disabled="loading.status">Refresh Status</button>
+        </div>
+        <div class="kpi">
+          <span class="pill">BASE_URL: <span class="hl">{{ baseUrl }}</span></span>
+          <span class="pill">Health: <span :class="health.ok ? 'ok' : 'err'">{{ health.ok ? 'OK' : 'DOWN' }}</span></span>
+          <span class="pill">Latency: <span class="hl" v-text="health.latency ? health.latency + ' ms' : '—'"></span></span>
+        </div>
+        <pre class="code" v-if="health.data">{{ pretty(health.data) }}</pre>
+        <hr class="sep" />
+        <div class="list" v-if="status.data">
+          <div class="item"><span class="muted">Disk Index</span><span class="hl">{{ status.data.faiss_indices?.join(', ') || '—' }}</span></div>
+          <div class="item"><span class="muted">Memory Cache</span><span class="hl">{{ status.data.cache_keys?.join(', ') || '—' }}</span></div>
+        </div>
+        <pre class="code" v-if="status.data && debug">{{ pretty(status.data) }}</pre>
+      </section>
+
+      <!-- Schema/DB Tables (shared output panel) -->
+      <section class="panel col-6">
+        <h2>Internal Info <span class="tag">/schema/preview, /db-tables</span></h2>
+        <p class="desc">Displays DB schema preview and table list alternately in a single output panel.</p>
+        <div class="row">
+          <button class="btn secondary" @click="getSchema" :disabled="loading.schema">Schema Preview</button>
+          <button class="btn secondary" @click="getDbTables" :disabled="loading.tables">DB Table List</button>
+        </div>
+        <div class="item" v-if="schemaPanelTitle">
+          <span class="muted">Output</span>
+          <span class="hl">{{ schemaPanelTitle }}</span>
+        </div>
+        <pre class="code" v-if="schemaPanel">{{ pretty(schemaPanel) }}</pre>
+      </section>
+
+      <!-- Ingest -->
+      <section class="panel col-6">
+        <h2>Build Index <span class="tag">/ingest</span></h2>
+        <p class="desc">Documents/chunks a table → embeds → saves as FAISS index. Recommended to run once initially.</p>
+        <div class="row">
+          <div style="flex:1">
+            <label>table</label>
+            <input type="text" v-model="ingest.table" placeholder="e.g.) knowledge_en" />
+          </div>
+          <div style="flex:1">
+            <label>save_name</label>
+            <input type="text" v-model="ingest.save_name" placeholder="e.g.) knowledge_en" />
+          </div>
+        </div>
+        <div class="row">
+          <div class="checkbox">
+            <input id="simulate" type="checkbox" v-model="ingest.simulate">
+            <label for="simulate">simulate (internal SQLite demo data)</label>
+          </div>
+        </div>
+        <div class="row">
+          <button class="btn" @click="postIngest" :disabled="loading.ingest">Run Index Build</button>
+        </div>
+        <pre class="code" v-if="ingest.result">{{ pretty(ingest.result) }}</pre>
+      </section>
+
+      <!-- Query -->
+      <section class="panel col-6">
+        <h2>Query / Answer <span class="tag">/query</span></h2>
+        <p class="desc">Retrieves from saved index then generates a English answer of 2+ sentences via Qwen.</p>
+        <div class="row">
+          <div style="flex:1">
+            <label>save_name</label>
+            <input type="text" v-model="query.save_name" placeholder="e.g.) knowledge_en" />
+          </div>
+          <div style="width:140px">
+            <label>top_k</label>
+            <input type="number" min="1" max="50" v-model.number="query.top_k" />
+          </div>
+          <div style="width:160px">
+            <label>margin</label>
+            <input type="number" step="0.01" v-model.number="query.margin" />
+          </div>
+        </div>
+        <div class="row">
+          <div style="flex:1">
+            <label>question</label>
+            <textarea v-model="query.question" placeholder="e.g.) Explain the role of Self-Attention in English in 2 or more sentences."></textarea>
+          </div>
+        </div>
+        <div class="row">
+          <button class="btn" @click="postQuery" :disabled="loading.query">Run Query</button>
+          <button class="btn secondary" @click="copyAnswer" :disabled="!query.result">Copy Answer</button>
+        </div>
+        <div v-if="query.result">
+          <div class="item"><span class="muted">Answer</span><span></span></div>
+          <pre class="code">{{ query.result.answer }}</pre>
+          <div class="item"><span class="muted">Sources</span><span class="hl">{{ (query.result.sources||[]).map(s => s.marker+':'+(s.title||s.id)).join(', ') || '—' }}</span></div>
+          <pre class="code" v-if="debug">{{ pretty(query.result) }}</pre>
+        </div>
+      </section>
+
+      <!-- Environment Settings -->
+      <section class="panel col-12">
+        <h2>Environment Settings <span class="tag">Console</span></h2>
+        <div class="row">
+          <div style="flex:1">
+            <label>API BASE_URL</label>
+            <input type="text" v-model="baseUrl" placeholder="e.g.) http://localhost:8002" />
+          </div>
+          <div class="inline">
+            <button class="btn secondary" @click="toggleDebug">{{ debug ? 'Hide Debug' : 'Show Debug' }}</button>
+          </div>
+        </div>
+        <p class="desc">Use the path as-is based on Swagger UI. If CORS is blocked, check the allowed origins in the server-side `CORSMiddleware`.</p>
+      </section>
+
+      <footer class="col-12">
+        <div>© RAG API Console • minimal & clean • Built for local ops</div>
+      </footer>
+    </div>
+  </main>
+
+  <!-- Vue 3 CDN -->
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  <script>
+    const { createApp, reactive } = Vue;
+
+    createApp({
+      data() {
+        return {
+          baseUrl: localStorage.getItem('rag_base_url') || (location.origin.includes('localhost') ? 'http://localhost:8002' : location.origin),
+          debug: false,
+
+          loading: reactive({ health:false, status:false, schema:false, tables:false, ingest:false, query:false }),
+
+          health: reactive({ ok:false, latency:null, data:null }),
+          status: reactive({ data:null }),
+
+          // ✅ Shared output panel state
+          schemaPanel: null,
+          schemaPanelTitle: '',
+
+          // (Individual states no longer rendered on screen, but kept optionally for debug)
+          schema: reactive({ data:null }),
+          tables: reactive({ data:null }),
+
+          ingest: reactive({ table:'knowledge_en', save_name:'knowledge_en', simulate:false, result:null }),
+          query: reactive({ save_name:'knowledge_en', question:'', top_k:5, margin:0.12, result:null }),
+        }
+      },
+      watch: {
+        baseUrl(v){ localStorage.setItem('rag_base_url', v); }
+      },
+      methods: {
+        pretty(o){ return typeof o === 'string' ? o : JSON.stringify(o, null, 2); },
+        toggleDebug(){ this.debug = !this.debug; },
+
+        async _get(path){
+          const t0 = performance.now();
+          const res = await fetch(`${this.baseUrl}${path}`);
+          const latency = Math.round(performance.now() - t0);
+          if(!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+          const data = await res.json();
+          return { data, latency };
+        },
+        async _post(path, body){
+          const t0 = performance.now();
+          const res = await fetch(`${this.baseUrl}${path}`, {
+            method: 'POST',
+            headers: { 'Content-Type':'application/json' },
+            body: JSON.stringify(body)
+          });
+          const latency = Math.round(performance.now() - t0);
+          if(!res.ok){
+            const msg = await res.text().catch(()=>res.statusText);
+            throw new Error(`${res.status} ${res.statusText} – ${msg}`);
+          }
+          const data = await res.json();
+          return { data, latency };
+        },
+
+        async checkHealth(){
+          this.loading.health = true;
+          this.health.ok = false; this.health.data = null; this.health.latency = null;
+          try{
+            const { data, latency } = await this._get('/health');
+            this.health.ok = data?.ok ?? true; this.health.data = data; this.health.latency = latency;
+          }catch(e){
+            this.health.ok = false; this.health.data = { error: e.message };
+          }finally{ this.loading.health = false; }
+        },
+
+        async getStatus(){
+          this.loading.status = true; this.status.data = null;
+          try{
+            const { data } = await this._get('/status');
+            this.status.data = data;
+          }catch(e){
+            this.status.data = { error: e.message };
+          }finally{ this.loading.status = false; }
+        },
+
+        // ✅ Output to shared panel only
+        async getSchema(){
+          this.loading.schema = true;
+          this.schemaPanel = null; this.schemaPanelTitle = 'Schema Preview';
+          try{
+            const { data } = await this._get('/schema/preview');
+            this.schema.data = data;              // (optional) internal storage
+            this.schemaPanel = data;              // update shared panel
+          }catch(e){
+            this.schemaPanel = { error: e.message };
+          }finally{ this.loading.schema = false; }
+        },
+
+        // ✅ Output to shared panel only
+        async getDbTables(){
+          this.loading.tables = true;
+          this.schemaPanel = null; this.schemaPanelTitle = 'DB Table List';
+          try{
+            const { data } = await this._get('/db-tables');
+            this.tables.data = data;              // (optional) internal storage
+            this.schemaPanel = data;              // update shared panel
+          }catch(e){
+            this.schemaPanel = { error: e.message };
+          }finally{ this.loading.tables = false; }
+        },
+
+        async postIngest(){
+          this.loading.ingest = true; this.ingest.result = null;
+          const payload = {
+            table: this.ingest.table || 'knowledge_en',
+            save_name: this.ingest.save_name || 'knowledge_en',
+            simulate: !!this.ingest.simulate
+          };
+          try{
+            const { data } = await this._post('/ingest', payload);
+            this.ingest.result = data;
+            await this.getStatus();
+          }catch(e){
+            this.ingest.result = { error: e.message, payload };
+          }finally{ this.loading.ingest = false; }
+        },
+
+        async postQuery(){
+          this.loading.query = true; this.query.result = null;
+          const payload = {
+            save_name: this.query.save_name || 'knowledge_en',
+            question: this.query.question || '',
+            top_k: Number(this.query.top_k) || 5,
+            margin: Number(this.query.margin ?? 0.12)
+          };
+          try{
+            const { data } = await this._post('/query', payload);
+            this.query.result = data;
+          }catch(e){
+            this.query.result = { error: e.message, payload };
+          }finally{ this.loading.query = false; }
+        },
+
+        async copyAnswer(){
+          if(!this.query.result?.answer) return;
+          try{
+            await navigator.clipboard.writeText(this.query.result.answer);
+            alert('Answer copied to clipboard.');
+          }catch(_){ /* noop */ }
+        }
+      },
+      mounted(){
+        // Initial status check
+        this.checkHealth().then(()=>this.getStatus());
+      }
+    }).mount('#app');
+  </script>
+</body>
+<!--
+#### This practice code is for learning purposes only. audit@korea.ac.kr Sung-Ryel Lim Ph.D.
+python -m http.server 5174
+# → http://localhost:5174/internal_index.html Connect
+-->
+</html>
