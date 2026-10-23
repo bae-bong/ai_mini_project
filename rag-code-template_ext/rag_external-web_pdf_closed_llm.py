@@ -1,6 +1,7 @@
 #### 다음 실습 코드는 학습 목적으로만 사용 바랍니다. 문의 : audit@korea.ac.kr 임성열 Ph.D.
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, Query
+from fastapi import FastAPI, UploadFile, File, HTTPException, Query, Depends
+from core.auth import get_current_user
 from sqlalchemy.ext.asyncio import create_async_engine
 from fastapi.responses import JSONResponse
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -110,7 +111,10 @@ def load_paper(file_path: str) -> str:
 
 # ✅ 웹 검색 → 외부 정보 벡터화
 @app.post("/upload-topic", summary="웹 검색 → 외부 정보 벡터화", tags=["외부 정보"])
-async def upload_topic(topic: str = Query(..., description="검색할 주제")):
+async def upload_topic(
+    topic: str = Query(..., description="검색할 주제"),
+    current_user: dict = Depends(get_current_user),
+):
     try:
         import os, re, aiohttp
         from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -200,7 +204,10 @@ async def upload_topic(topic: str = Query(..., description="검색할 주제")):
 
 # ✅ PDF 업로드 및 벡터화
 @app.post("/upload-paper", summary="PDF 업로드 및 벡터화", tags=["PDF 처리"]) 
-async def upload_pdf(file: UploadFile = File(...)):
+async def upload_pdf(
+    file: UploadFile = File(...),
+    current_user: dict = Depends(get_current_user),
+):
     if not file.filename.endswith(".pdf"):
         raise HTTPException(status_code=400, detail="PDF 파일만 허용됩니다.")
 
@@ -304,7 +311,10 @@ def fallback_extract_from_context(context: str, question: str) -> str | None:
 
 # ✅ 질의 응답 라우터
 @app.post("/rag-query", response_model=AnswerResponse, summary="Closed Source LLM + 벡터 DB 질의", tags=["질의 응답"])
-async def rag_query(rag_request: RAGRequest = Body(...)):
+async def rag_query(
+    rag_request: RAGRequest = Body(...),
+    current_user: dict = Depends(get_current_user),
+):
     # 1. 벡터스토어 및 LLM 결정
     if rag_request.source == "web":
         if VECTORSTORE_WEB is None:
