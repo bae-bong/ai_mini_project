@@ -267,11 +267,11 @@ sudo docker compose logs --tail=100 auth rag nginx
 
 EC2 콘솔에서 현재 인스턴스에 연결된 보안 그룹의 인바운드 규칙에 추가한다.
 
-| 종류 | TCP 포트 | IPv4 소스 |
-|---|---|---|
-| HTTP | 80 | `0.0.0.0/0` |
-| HTTPS | 443 | `0.0.0.0/0` |
-| SSH | 22 | 관리자 공인 IP만 유지 |
+| 종류  | TCP 포트 | IPv4 소스             |
+| ----- | -------- | --------------------- |
+| HTTP  | 80       | `0.0.0.0/0`           |
+| HTTPS | 443      | `0.0.0.0/0`           |
+| SSH   | 22       | 관리자 공인 IP만 유지 |
 
 8001·8080·5432는 외부에 열지 않는다. HTTP-01 인증서 발급·갱신에는 80 포트가 필요하므로 발급 후에도 유지한다. [Let's Encrypt 인증 방식](https://letsencrypt.org/docs/challenge-types/)
 
@@ -512,3 +512,17 @@ sudo docker compose exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_
 로컬에서 ARM64 이미지를 빌드해 EC2로 전송하는 방법은 [LOCAL_IMAGE_DEPLOY.md](LOCAL_IMAGE_DEPLOY.md)에 보류 항목으로 저장했다. 현재 배포 방식은 EC2 빌드로 유지한다.
 
 변경 이유·영향 파일·검증 결과·남은 작업은 [docs/WORK_LOG.md](../docs/WORK_LOG.md)에 날짜별로 기록한다. 팀의 과거 평가 결과와 검토 문서는 당시 FAISS 결과로 남기고, 이번 변경의 안내는 [PGVECTOR_MIGRATION.md](../rag-code-template_ext/law_pipeline/PGVECTOR_MIGRATION.md)를 따른다.
+
+```markdown
+# 이후 EC2에서 업데이트할 때:
+
+cd ~/ai_mini_project
+git switch develop
+git pull --ff-only origin develop
+
+sudo docker compose -f compose.yaml -f compose.public.yaml \
+ up -d --build --wait
+
+sudo docker compose -f compose.yaml -f compose.public.yaml \
+ up -d --no-deps --no-build --force-recreate --wait nginx
+```
