@@ -45,7 +45,8 @@ def search_law(vectorstore, question: str, k: int, mode: str | None = None):
 
 
 # 질문 재작성(multi-query): 일상어 질문을 법률 용어로 바꿔 한 번 더 검색
-QUERY_REWRITE = os.getenv("RAG_QUERY_REWRITE", "1") == "1"
+# 실험 결과(2026-10-23): 13번 미해결, 정확성 93.8→85.4%, 응답 2.0→3.4초 → 기본 꺼둠
+QUERY_REWRITE = os.getenv("RAG_QUERY_REWRITE", "0") == "1"
 
 _REWRITE_PROMPT = (
     "다음 질문을 한국 법령 조문에서 검색하기 좋은 검색어 한 줄로 바꿔라.\n"
