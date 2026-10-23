@@ -123,12 +123,13 @@ def summarize(rows):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--base-url", default=os.getenv("RAG_BASE_URL", "http://localhost:8001"))
+    ap.add_argument("--base-url", default=os.getenv("RAG_BASE_URL", "http://127.0.0.1:8080/api/rag"))
     ap.add_argument("--label", default="run")
     ap.add_argument("--top-k", type=int, default=20)
     ap.add_argument("--repeat", type=int, default=1, help="같은 설정 반복 횟수 (평균·범위 보고)")
     ap.add_argument("--employees", type=int, default=None)
     ap.add_argument("--company-types", default="")
+    ap.add_argument("--set", default="eval_set.csv", help="평가셋 파일 (예: holdout_set.csv)")
     ap.add_argument("--only", default="", help="쉼표로 문항 id 지정 (예: 1,2,21)")
     args = ap.parse_args()
 
@@ -140,7 +141,7 @@ def main():
 
     token = make_token(args.employees, [t for t in args.company_types.split(",") if t])
     headers = {"Authorization": f"Bearer {token}"}
-    with open(BASE / "eval_set.csv", encoding="utf-8-sig") as f:
+    with open(BASE / args.set, encoding="utf-8-sig") as f:
         cases = list(csv.DictReader(f))
     if args.only:
         ids = set(args.only.split(","))

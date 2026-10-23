@@ -51,6 +51,37 @@ def search_law_pipeline(vectorstore, question: str, k: int, mode: str | None = N
     return search(question, k, store=vectorstore, mode=mode or SEARCH_MODE)
 
 
+# 일상어 → 법령 용어 확장 (LLM 호출 없음). 검색어에만 덧붙이고 LLM에는 원래 질문을 준다.
+# 특정 평가 문항용 규칙(예: 금품 청산)은 넣지 않는다 — 일반적인 동의어만.
+USE_SYNONYMS = os.getenv("RAG_SYNONYMS", "1") == "1"
+SYNONYMS = [
+    (r"월급|(?<!퇴직)급여|급료|봉급|알바비|페이", "임금"),
+    (r"그만두|그만 두|퇴사|관두", "퇴직"),
+    (r"사장|고용주|회사가", "사용자"),
+    (r"직원|알바|아르바이트|노동자|사원|직장인", "근로자"),
+    (r"알바|아르바이트|파트타임", "단시간근로자"),
+    (r"잘리|짤리|자르|내보내", "해고"),
+    (r"쉬는 ?시간|휴식 ?시간|점심 ?시간", "휴게"),
+    (r"쉬는 ?날|노는 ?날|공휴일|빨간 ?날", "휴일"),
+    (r"야근|잔업|초과근무|오버타임", "연장근로"),
+    (r"출산휴가", "출산전후휴가"),
+    # 주제어 → 소관 법령명 (청크 머리에 법령명이 있어 BM25·임베딩 모두 해당 법 조문을 끌어올림)
+    (r"퇴직금|퇴직연금|퇴직급여", "근로자퇴직급여 보장법"),
+    (r"최저임금|최저시급", "최저임금법"),
+    (r"육아휴직|배우자 ?출산|난임", "남녀고용평등법"),
+]
+
+
+def expand_query(question: str) -> str:
+    """질문에 일상어가 있으면 대응하는 법령 용어를 뒤에 붙인다. 이미 있는 용어는 생략."""
+    import re
+    terms = []
+    for pattern, term in SYNONYMS:
+        if re.search(pattern, question) and term not in question and term not in terms:
+            terms.append(term)
+    return f"{question} ({' '.join(terms)})" if terms else question
+
+
 def cited_sources(sources: list[dict], answer: str, fallback: int = 3) -> list[dict]:
     """답변에 실제로 인용된 조문만 남긴다 (같은 법령·조문 중복 제거).
     - '제60조'가 '제60조의2'에 잘못 걸리지 않게 뒤에 '의'가 오면 제외

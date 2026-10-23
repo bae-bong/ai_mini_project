@@ -14,6 +14,8 @@ EFFECTIVE = re.compile(r"\[시행일:\s*" + DATE + r"\]\s*([^\n]*)")
 ARTICLE = re.compile(r"^(제\d+조(?:의\d+)?)(?:\s*\(([^)]*)\)|\s+(삭제))")
 CHAPTER = re.compile(r"^제\d+(?:장|절|관)\s+")
 ADDENDUM = re.compile(r"^부\s*칙\s*<")
+# 정의 조항의 호: 줄 첫머리 '1. “근로자”란' 형태 (인용부호로 시작하는 용어 정의만)
+DEF_ITEM = re.compile(r"^(\d+(?:의\d+)?)\.\s*[“\"「]", re.M)
 
 
 def digest(data: bytes) -> str:
@@ -130,7 +132,21 @@ def parse_pages(pages: list[dict], source: dict, pdf_hash: str, as_of: str) -> l
     return records
 
 
-def chunk_records(records: list[dict], size: int = 1000, overlap: int = 200) -> list[dict]:
+def definition_segments(rec: dict) -> list[tuple[int, int, str | None]]:
+    """정의 조항이면 호 단위 구간 [(start, end, item_no)], 아니면 [(0, len, None)].
+    용어 하나를 묻는 질문이 긴 정의 조항 청크에 묻혀 검색되지 않는 문제를 막는다."""
+    text = rec["text"]
+    if rec.get("article_title") != "정의":
+        return [(0, len(text), None)]
+    items = list(DEF_ITEM.finditer(text))
+    if len(items) < 2:
+        return [(0, len(text), None)]
+    bounds = [m.start() for m in items] + [len(text)]
+    return [(bounds[i], bounds[i + 1], m[1]) for i, m in enumerate(items)]
+
+
+def chunk_records(records: list[dict], size: int = 1000, overlap: int = 200,
+                  split_definitions: bool = True) -> list[dict]:
     if not 0 <= overlap < size or size < 100:
         raise ValueError("chunk_size >= 100, 0 <= overlap < chunk_size가 필요합니다.")
     chunks = []
@@ -138,34 +154,44 @@ def chunk_records(records: list[dict], size: int = 1000, overlap: int = 200) -> 
     for rec in records:
         if rec["status"] != "current":
             continue
-        text, start, number = rec["text"], 0, 0
-        while start < len(text):
-            end = min(start + size, len(text))
-            if end < len(text):
-                boundary = text.rfind("\n", start + max(overlap + 1, size // 2), end)
-                if boundary > start:
-                    end = boundary + 1
-            spans = [s for s in rec["spans"] if s["end"] > start and s["start"] < end]
-            pages = sorted({s["page"] for s in spans})
-            metadata = {k: v for k, v in rec.items() if k not in {"text", "spans", "effective_annotations"}}
-            document_key = (rec["law_name"], rec["source"])
-            metadata.update(type="law", doc_type="law", doc_id=f"law:{rec['law_name']}",
-                            title=rec["law_name"], source_file=rec["source"],
-                            article_no=rec["article"] or None,
-                            effective_date=rec["document_effective_date"] or None,
-                            ingested_at=None,  # Filled at successful index-build preparation, not extraction.
-                            page=rec["page_start"], article_page_start=rec["page_start"],
-                            page_start=pages[0], page_end=pages[-1], pages=pages,
-                            chunk_index=document_ordinals[document_key], article_chunk_index=number,
-                            chunk_id=f"{rec['record_id']}-{number}", char_start=start, char_end=end,
-                            supplements_required=True)
-            # Include the article label in every embedding, even continuation chunks.
-            prefix = f"{rec['law_name']} {rec['article']}({rec['article_title']})\n"
-            chunks.append({"page_content": prefix + text[start:end], "metadata": metadata})
-            document_ordinals[document_key] += 1
-            if end == len(text):
-                break
-            start, number = end - overlap, number + 1
+        text, number = rec["text"], 0
+        segments = definition_segments(rec) if split_definitions else [(0, len(text), None)]
+        # 호 단위로 쪼갠 경우 조문 첫머리(“이 법에서 사용하는 용어의 뜻은…”)를 각 청크에 붙인다
+        lead = text[:segments[0][0]].strip() if segments[0][2] else ""
+        for seg_start, seg_end, item_no in segments:
+            start = seg_start
+            while start < seg_end:
+                end = min(start + size, seg_end)
+                if end < seg_end:
+                    boundary = text.rfind("\n", start + max(overlap + 1, size // 2), end)
+                    if boundary > start:
+                        end = boundary + 1
+                spans = [s for s in rec["spans"] if s["end"] > start and s["start"] < end]
+                pages = sorted({s["page"] for s in spans})
+                metadata = {k: v for k, v in rec.items() if k not in {"text", "spans", "effective_annotations"}}
+                document_key = (rec["law_name"], rec["source"])
+                metadata.update(type="law", doc_type="law", doc_id=f"law:{rec['law_name']}",
+                                title=rec["law_name"], source_file=rec["source"],
+                                article_no=rec["article"] or None,
+                                effective_date=rec["document_effective_date"] or None,
+                                ingested_at=None,  # Filled at successful index-build preparation, not extraction.
+                                page=rec["page_start"], article_page_start=rec["page_start"],
+                                page_start=pages[0], page_end=pages[-1], pages=pages,
+                                chunk_index=document_ordinals[document_key], article_chunk_index=number,
+                                chunk_id=f"{rec['record_id']}-{number}", char_start=start, char_end=end,
+                                supplements_required=True)
+                if item_no:
+                    metadata["item_no"] = item_no
+                # Include the article label in every embedding, even continuation chunks.
+                prefix = f"{rec['law_name']} {rec['article']}({rec['article_title']})\n"
+                if item_no and lead:
+                    prefix += lead + "\n"
+                chunks.append({"page_content": prefix + text[start:end], "metadata": metadata})
+                document_ordinals[document_key] += 1
+                number += 1
+                if end == seg_end:
+                    break
+                start = end - overlap
     return chunks
 
 
@@ -204,7 +230,8 @@ def preprocess(manifest: Path, raw_dir: Path, output: Path, as_of: str | None = 
         all_records.extend(records)
         source_reports.append({**source, "sha256": pdf_hash, "pages": len(pages),
                                "statuses": dict(Counter(r["status"] for r in records))})
-    chunks = chunk_records(all_records, cfg.get("chunk_size", 1000), cfg.get("chunk_overlap", 200))
+    chunks = chunk_records(all_records, cfg.get("chunk_size", 1000), cfg.get("chunk_overlap", 200),
+                           cfg.get("split_definitions", True))
     output.mkdir(parents=True, exist_ok=True)
     write_jsonl(output / "pages.jsonl", all_pages)
     write_jsonl(output / "articles.jsonl", all_records)
