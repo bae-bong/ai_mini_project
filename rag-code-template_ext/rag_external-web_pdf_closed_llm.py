@@ -60,6 +60,13 @@ app = FastAPI(
     description="외부 정보 기반 벡터화 + LLM 질의 응답",
     version="1.0.0"
 )
+@app.get("/health", tags=["상태"])
+def health():
+    return {
+        "status": "ok",
+        "pdf_index": VECTORSTORE_PDF is not None,
+        "web_index": VECTORSTORE_WEB is not None,
+    }
 
 from fastapi.middleware.cors import CORSMiddleware
 app.add_middleware(
@@ -109,7 +116,7 @@ def load_paper(file_path: str) -> str:
     return "\n".join(text for page in reader.pages if (text := page.extract_text()))
 
 # ✅ 웹 검색 → 외부 정보 벡터화
-@app.post("/upload-topic", summary="웹 검색 → 외부 정보 벡터화", tags=["외부 정보"])
+# @app.post("/upload-topic", summary="웹 검색 → 외부 정보 벡터화", tags=["외부 정보"])
 async def upload_topic(topic: str = Query(..., description="검색할 주제")):
     try:
         import os, re, aiohttp
@@ -225,7 +232,11 @@ async def upload_pdf(file: UploadFile = File(...)):
         # [Q02] PDF 임베딩과 벡터 저장소 연결
         # [설계 판단] 분할한 PDF 문서(docs)를 OpenAI 임베딩 모델로 벡터화하여 FAISS 검색 저장소로 만드세요.
         # [TODO Q02] 아래 ... 부분을 적절한 코드로 교체하세요.
-        VECTORSTORE_PDF = FAISS.from_documents(docs, OpenAIEmbeddings())
+        new_store = FAISS.from_documents(docs, OpenAIEmbeddings())
+        if VECTORSTORE_PDF is None:
+            VECTORSTORE_PDF = new_store
+        else:
+            VECTORSTORE_PDF.merge_from(new_store)
 
         # ✅ 디스크에 저장
         os.makedirs("faiss_db/pdf", exist_ok=True)
