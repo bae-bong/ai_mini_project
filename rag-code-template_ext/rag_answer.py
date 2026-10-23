@@ -16,9 +16,32 @@ RISK_KEYWORDS = ("해고", "부당", "체불", "분쟁", "소송", "고소", "�
 WEAK_DISTANCE = float(os.getenv("RAG_WEAK_DISTANCE", "0.5"))
 
 
-def search_law(vectorstore, question: str, k: int):
-    """[(Document, distance)] 반환. law_pipeline 머지 후 이 함수 안만 hybrid search로 바꾼다."""
-    return vectorstore.similarity_search_with_score(question, k=k)
+# 검색 방식: dense(의미 검색만) | hybrid(의미 + 키워드 BM25, 순위 합산 RRF)
+SEARCH_MODE = os.getenv("RAG_SEARCH_MODE", "hybrid")
+
+
+def search_law(vectorstore, question: str, k: int, mode: str | None = None):
+    """[(Document, L2 거리)] 반환. 거리는 항상 의미 검색 원값(작을수록 유사)을 유지한다.
+
+    hybrid: 법령 청크가 수백 개 수준이라 전체를 의미 검색으로 순위화한 뒤,
+    도균님 law_pipeline 의 BM25(한글 2·3-gram) 점수 순위와 RRF로 합친다.
+    점수 크기(L2 vs BM25)는 비교할 수 없어서 '순위'만 더한다.
+    """
+    mode = mode or SEARCH_MODE
+    if mode != "hybrid":
+        return vectorstore.similarity_search_with_score(question, k=k)
+
+    from law_pipeline.index import lexical_scores
+
+    total = int(vectorstore.index.ntotal)
+    ranked = vectorstore.similarity_search_with_score(question, k=total)
+    lexical = lexical_scores([d.page_content for d, _ in ranked], question)
+    lex_order = sorted(range(len(ranked)), key=lambda i: (-lexical[i], i))
+    lex_rank = {i: pos + 1 for pos, i in enumerate(lex_order) if lexical[i] > 0}
+    fused = {i: 1 / (60 + i + 1) + (1 / (60 + lex_rank[i]) if i in lex_rank else 0)
+             for i in range(len(ranked))}
+    order = sorted(fused, key=lambda i: -fused[i])[:k]
+    return [ranked[i] for i in order]
 
 
 def law_sources(docs_scores) -> list[dict]:
