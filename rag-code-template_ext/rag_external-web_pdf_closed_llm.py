@@ -16,7 +16,8 @@ from langchain_core.messages import HumanMessage
 from fastapi import Form
 from rag_meta import build_law_chunks
 from rag_answer import (search_law, law_sources, judge_needs_review, build_law_context,
-                        build_law_prompt, persona_applied, NOT_FOUND, REVIEW_NOTICE)
+                        build_law_prompt, persona_applied, NOT_FOUND, REVIEW_NOTICE,
+                        retrieved_list, PROMPT_VERSION)
 
 # 패키지는 저자 업데이트에 맞춰 해당 버전으로 맞추는 것을 권장
 # 직접 저자의 site-packages/패키지명/을 직접 수정하는 것은 추천하지 않음
@@ -51,6 +52,11 @@ BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
+# 답변 재현성: 같은 질문에 같은 답 (평가 수치 안정). 실험 비교 시 RAG_TEMPERATURE 로 변경
+LLM_TEMPERATURE = float(os.getenv("RAG_TEMPERATURE", "0"))
+# seed: OpenAI의 best-effort 결정성 (temperature 0만으로는 답이 흔들림)
+LLM_SEED = int(os.getenv("RAG_SEED", "42"))
 
 if not OPENAI_API_KEY:
     raise RuntimeError("OPENAI_API_KEY가 설정되지 않았습니다.")
@@ -293,6 +299,8 @@ class AnswerResponse(BaseModel):
     review_reason: Optional[str] = None
     persona_applied: Optional[Dict[str, Any]] = None
     sources: List[Dict[str, Any]] = []
+    retrieved: List[Dict[str, Any]] = []   # 검색 후보 (답을 못 찾아도 남김, 원인 분석용)
+    config: Dict[str, Any] = {}            # 실험 설정 기록 (검색 방식·프롬프트·top_k)
 
 # ✅ RAG 기반 질의 응답 처리
 from fastapi import Body
@@ -354,7 +362,7 @@ async def rag_query(
                 detail="❗ 외부 WEB 벡터값이 로딩되지 않았습니다. 먼저 외부 정보를 수집해서 벡터화를 진행해주세요.",
             )
         vectorstore = VECTORSTORE_WEB
-        llm = ChatOpenAI(model="gpt-4o", temperature=0.3)
+        llm = ChatOpenAI(model="gpt-4o", temperature=LLM_TEMPERATURE, seed=LLM_SEED)
         llm_type = "openai" # huggingface
 
     elif rag_request.source == "pdf":
@@ -367,7 +375,7 @@ async def rag_query(
         # [설계 판단] 사용자가 source="pdf"를 선택하면 웹 저장소가 아니라 PDF 저장소를 검색하도록 연결하세요.
         # [TODO Q03] 아래 ... 부분을 적절한 코드로 교체하세요.
         vectorstore = VECTORSTORE_PDF
-        llm = ChatOpenAI(model="gpt-4o", temperature=0.3)
+        llm = ChatOpenAI(model="gpt-4o", temperature=LLM_TEMPERATURE, seed=LLM_SEED)
         llm_type = "openai"
 
     else:
@@ -399,11 +407,16 @@ async def rag_query(
             needs_review, review_reason = judge_needs_review(rag_request.prompt, docs_scores)
             sources = law_sources(docs_scores)
 
+            run_config = {"search": os.getenv("RAG_SEARCH_MODE", "hybrid"), "prompt": PROMPT_VERSION,
+                          "top_k": top_k, "temperature": LLM_TEMPERATURE, "seed": LLM_SEED}
+            retrieved = retrieved_list(docs_scores)
+
             context = build_law_context(docs_scores)
             if not context.strip():
                 return AnswerResponse(prompt=rag_request.prompt, response=NOT_FOUND,
                                       needs_review=True, review_reason="검색 근거 없음",
-                                      persona_applied=persona_applied(persona), sources=[])
+                                      persona_applied=persona_applied(persona), sources=[],
+                                      retrieved=retrieved, config=run_config)
 
             full_prompt = build_law_prompt(rag_request.prompt, context, persona)
             # [Q05] 검색 근거를 LLM 답변으로 연결
@@ -416,12 +429,14 @@ async def rag_query(
                 # 근거가 없다고 답했으면 출처를 붙이지 않는다 (근거 없는 출처 표시 방지)
                 return AnswerResponse(prompt=rag_request.prompt, response=NOT_FOUND,
                                       needs_review=True, review_reason=review_reason or "근거에서 답을 찾지 못함",
-                                      persona_applied=persona_applied(persona), sources=[])
+                                      persona_applied=persona_applied(persona), sources=[],
+                                      retrieved=retrieved, config=run_config)
             if needs_review:
                 final = f"{final}\n\n{REVIEW_NOTICE}"
             return AnswerResponse(prompt=rag_request.prompt, response=final,
                                   needs_review=needs_review, review_reason=review_reason,
-                                  persona_applied=persona_applied(persona), sources=sources)
+                                  persona_applied=persona_applied(persona), sources=sources,
+                                  retrieved=retrieved, config=run_config)
 
         # -------------------- WEB 검색 --------------------
         elif source == "web":

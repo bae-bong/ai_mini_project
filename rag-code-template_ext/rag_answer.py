@@ -105,13 +105,27 @@ def build_law_context(docs_scores, max_chars: int = 12000) -> str:
     return "\n\n".join(buf)
 
 
-def build_law_prompt(question: str, context: str, persona: dict | None) -> str:
+# 프롬프트 버전: v1(근거 없으면 전체 거절) | v2(부분 답변 허용)
+PROMPT_VERSION = os.getenv("RAG_PROMPT_VERSION", "v2")
+PARTIAL_MISSING = "자료에 없음"
+
+_RULE_NOT_FOUND = {
+    "v1": "3. 근거에서 답을 찾을 수 없으면 정확히 '" + NOT_FOUND + "'이라고만 답한다.\n",
+    "v2": ("3. 근거가 질문과 전혀 관련 없을 때만 정확히 '" + NOT_FOUND + "'이라고만 답한다.\n"
+           "   질문의 일부만 근거가 있으면, 근거가 있는 부분은 출처와 함께 답하고 "
+           "근거가 없는 부분은 '" + PARTIAL_MISSING + "'이라고 밝힌다.\n"
+           "   부분 답변에는 '" + NOT_FOUND + "'라는 문구를 쓰지 않는다.\n"),
+}
+
+
+def build_law_prompt(question: str, context: str, persona: dict | None, version: str | None = None) -> str:
+    rule3 = _RULE_NOT_FOUND.get(version or PROMPT_VERSION, _RULE_NOT_FOUND["v2"])
     return (
         "당신은 중소기업 경영지원 담당자를 돕는 노무·정책 안내 어시스턴트입니다.\n"
         "규칙:\n"
         "1. 아래 [근거]에 있는 내용만으로 한국어로 답한다. 근거에 없는 수치나 조건을 만들지 않는다.\n"
         "2. 답의 근거가 된 문장 끝에 (법령명 제n조) 형식으로 출처를 붙인다.\n"
-        "3. 근거에서 답을 찾을 수 없으면 정확히 '" + NOT_FOUND + "'이라고만 답한다.\n"
+        + rule3 +
         "4. 법이 세부 내용을 '대통령령'·'고용노동부령'에 위임하면, 위임 사실과 세부 기준은 시행령 확인이 필요하다고 밝힌다.\n"
         "5. 사용자 기업 정보(직원 수 등)에 따라 적용이 달라지는 조항이면 그 점을 짚는다. 정보가 없으면 가정하지 않는다.\n\n"
         f"{persona_note(persona)}\n\n"
@@ -119,6 +133,16 @@ def build_law_prompt(question: str, context: str, persona: dict | None) -> str:
         f"질문: {question}\n\n"
         "답변:"
     )
+
+
+def retrieved_list(docs_scores) -> list[dict]:
+    """답을 못 찾았을 때도 남기는 검색 후보 (원인 분석용: 검색 실패 vs LLM 판단)."""
+    out = []
+    for doc, score in docs_scores:
+        m = doc.metadata or {}
+        out.append({"title": m.get("law_name") or m.get("title"), "article": m.get("article_no"),
+                    "score": round(float(score), 4)})
+    return out
 
 
 def persona_applied(persona: dict | None) -> dict | None:
