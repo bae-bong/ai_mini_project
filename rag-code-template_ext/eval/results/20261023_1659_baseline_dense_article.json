@@ -1,0 +1,17 @@
+{
+  "label": "baseline_dense_article",
+  "time": "20261023_1659",
+  "top_k": 5,
+  "employees": null,
+  "n": 25,
+  "grounded_rate": 0.8,
+  "grounded_n": 20,
+  "accuracy_rate": 0.733,
+  "accuracy_n": 15,
+  "hallucination_rate": 0.0,
+  "hallucination_n": 4,
+  "review_detect_rate": 1.0,
+  "review_n": 1,
+  "latency_ms_p50": 1777,
+  "latency_ms_max": 3569
+}
