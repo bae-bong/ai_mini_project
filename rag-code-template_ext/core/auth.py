@@ -63,4 +63,15 @@ def get_current_user(
             detail="Invalid token payload",
         )
 
-    return {"id": int(user_id), "username": username}
+    # 페르소나 claim (로그인 때 Java 가 넣어줌). 없으면 미입력으로 처리
+    employees = payload.get("employees")
+    company_types = payload.get("companyTypes") or []
+
+    return {
+        "id": int(user_id),
+        "username": username,
+        "persona": {
+            "employees": employees if isinstance(employees, int) else None,
+            "company_types": [t for t in company_types if isinstance(t, str) and t],
+        },
+    }

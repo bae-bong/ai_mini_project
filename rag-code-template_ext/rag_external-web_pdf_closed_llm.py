@@ -78,6 +78,16 @@ from core.logging_mw import add_logging_middleware
 register_error_handlers(app)
 add_logging_middleware(app)
 
+# ✅ 상태 확인 (인증 없음)
+@app.get("/health", summary="서버 상태 확인", tags=["공통"])
+async def health():
+    return {"status": "ok"}
+
+# ✅ 로그인 사용자·페르소나 확인 (인증 필요)
+@app.get("/me", summary="토큰의 사용자·페르소나 확인", tags=["공통"])
+async def me(current_user: dict = Depends(get_current_user)):
+    return current_user
+
 # ✅ 전역 벡터 저장소
 VECTORSTORE_WEB = None
 VECTORSTORE_PDF = None
