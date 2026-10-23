@@ -163,9 +163,95 @@ def parse_period(raw: str | None):
     return None, None
 
 
-def notice_status(period_end: str | None, today: date | None = None) -> str:
-    """질문 시점 기준 접수 상태. 저장하지 않고 매번 계산한다."""
-    if not period_end:
-        return "기간 확인 필요"
-    today = today or datetime.now(KST).date()
-    return "접수중" if date.fromisoformat(period_end) >= today else "마감"
+def notice_status(period_end: str | None, today: date | None = None, period_raw: str | None = None) -> str:
+    """질문 시점 기준 접수 상태. 저장하지 않고 매번 계산한다.
+    날짜가 없는 공고는 기업마당 기간 문구로 판단 (상시 접수·예산 소진시까지·모집 완료시·세부사업별 상이)."""
+    if period_end:
+        today = today or datetime.now(KST).date()
+        return "접수중" if date.fromisoformat(period_end) >= today else "마감"
+    raw = period_raw or ""
+    if "상시" in raw:
+        return "상시접수"
+    if "소진" in raw or "완료" in raw:
+        return "접수중(예산·모집 소진 시 마감)"
+    if "상이" in raw:
+        return "세부사업별 상이"
+    return "기간 확인 필요"
+
+
+# ---------------------------------------------------------------------------
+# 공고 (기업마당 bizinfo) — 은빈 tools/make_notice_meta.py 의 meta JSON 형식을 그대로 받는다
+# {"notice_id", "title", "agency", "executor", "period_raw", "target", "field", "company_types", "url"}
+# 선택: "summary"(사업개요), "apply_how"(신청방법) — 개요 청크 본문에만 들어감
+# ---------------------------------------------------------------------------
+NOTICE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{4,64}$")
+# 공고 분류 라벨(make_notice_meta.py) → 회원가입 페르소나 기업유형(frontend/assets/app.js)으로 통일
+COMPANY_TYPE_ALIASES = {"청년창업": "청년창업기업", "창업": "창업기업", "벤처·이노비즈": "벤처기업",
+                        "벤처": "벤처기업", "소·중기업": "소기업·중소기업", "중소기업": "소기업·중소기업"}
+
+
+# HWP→PDF 변환본 등에서 나오는 NUL(0x00)·제어문자는 PostgreSQL text에 저장할 수 없어 제거
+_CTRL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
+def strip_ctrl(text):
+    return _CTRL_RE.sub("", text) if isinstance(text, str) else text
+
+
+def notice_base_metadata(meta: dict) -> dict:
+    meta = {k: strip_ctrl(v) for k, v in meta.items()}
+    nid = str(meta.get("notice_id") or "").strip()
+    title = str(meta.get("title") or "").strip()
+    if not NOTICE_ID_RE.match(nid) or not title:
+        raise ValueError("meta에 notice_id(영문·숫자·_-)와 title이 필요합니다.")
+    start, end = parse_period(meta.get("period_raw"))
+    types = meta.get("company_types") or []
+    if isinstance(types, str):
+        types = [t.strip() for t in types.split(",") if t.strip()]
+    types = list(dict.fromkeys(COMPANY_TYPE_ALIASES.get(t, t) for t in types))
+    return {
+        "doc_type": "notice", "type": "notice", "doc_id": f"notice:{nid}", "notice_id": nid,
+        "title": title, "agency": meta.get("agency"), "executor": meta.get("executor"),
+        "period_raw": meta.get("period_raw"), "apply_start": start, "apply_end": end,
+        "target": meta.get("target"), "field": meta.get("field"),
+        "company_types": types, "url": meta.get("url"),
+        "ingested_at": datetime.now(KST).isoformat(timespec="seconds"),
+    }
+
+
+def notice_overview_text(base: dict) -> str:
+    rows = [("공고명", base["title"]), ("소관기관", base.get("agency")), ("수행기관", base.get("executor")),
+            ("신청기간", base.get("period_raw")), ("지원대상", base.get("target")),
+            ("지원분야", base.get("field")), ("대상 기업유형", ", ".join(base.get("company_types") or []))]
+    return "\n".join(f"{k}: {v}" for k, v in rows if v)
+
+
+def build_notice_chunks(meta: dict, pdf_path: str | None = None, filename: str | None = None,
+                        max_chars: int = 1000, overlap: int = 200) -> tuple[list[dict], list[dict]]:
+    """(개요 청크, 첨부 본문 청크) 반환.
+    덮어쓰기 키 source_file: 개요 = '{notice_id}/_meta', 첨부 = '{notice_id}/{파일명}'
+    → 같은 공고·같은 파일을 다시 올리면 그 청크만 교체된다."""
+    from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+    meta = {k: strip_ctrl(v) for k, v in meta.items()}
+    base = notice_base_metadata(meta)
+    nid, head = base["notice_id"], f"[공고] {base['title']}\n"
+    extra = "".join(f"\n{k}: {str(meta[f]).strip()}" for k, f in (("사업개요", "summary"), ("신청방법", "apply_how"))
+                    if meta.get(f) and str(meta[f]).strip())
+    overview = [{"page_content": head + notice_overview_text(base) + extra,
+                 "metadata": {**base, "source_file": f"{nid}/_meta", "section": "overview",
+                              "page": 0, "chunk_index": 0, "chunk_id": f"{nid}/_meta-0"}}]
+    body = []
+    if pdf_path:
+        filename = unicodedata.normalize("NFC", (filename or "attachment.pdf").rsplit("/", 1)[-1])
+        source_file = f"{nid}/{filename}"
+        splitter = RecursiveCharacterTextSplitter(chunk_size=max_chars, chunk_overlap=overlap)
+        for page_no, page in enumerate(PdfReader(pdf_path).pages, start=1):
+            text = re.sub(r"[ \t]+", " ", strip_ctrl(page.extract_text() or "")).strip()
+            for piece in splitter.split_text(text) if text else []:
+                i = len(body)
+                body.append({"page_content": head + piece,
+                             "metadata": {**base, "source_file": source_file, "section": "body",
+                                          "page": page_no, "chunk_index": i,
+                                          "chunk_id": f"{source_file}-{i}"}})
+    return overview, body
