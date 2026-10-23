@@ -19,15 +19,9 @@ nest_asyncio>=1.6
 aiohttp>=3.9
 beautifulsoup4>=4.12
 
-# DB (Async)
-sqlalchemy>=2.0,<3.0
-aiomysql>=0.2
-pymysql>=1.1
-aiosqlite>=0.19
-greenlet>=3.0
+# PostgreSQL
+psycopg[binary]>=3.2,<4
 
-# Vector DB
-faiss-cpu>=1.7
 
 # PDF
 pypdf>=4.0

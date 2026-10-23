@@ -1,3 +1,4 @@
+import os
 import hashlib
 import json
 import tempfile
@@ -131,8 +132,9 @@ class SuppliedPDFTests(unittest.TestCase):
                 preprocess(ROOT / "data/laws/sources.json", ROOT.parent / "upload-paper", out, "2027-06-10")
 
 
+@unittest.skipUnless(os.getenv("RUN_DB_TESTS") == "1", "격리된 PostgreSQL에서 RUN_DB_TESTS=1로 실행")
 class IndexTests(unittest.TestCase):
-    def test_real_faiss_roundtrip_and_model_manifest(self):
+    def test_pgvector_roundtrip_and_model_manifest(self):
         from langchain_core.embeddings import Embeddings
         from law_pipeline.index import build_index, load_index, search
         from law_pipeline.extract import write_jsonl
@@ -152,18 +154,16 @@ class IndexTests(unittest.TestCase):
             write_jsonl(processed / "chunks.jsonl", chunk_records(recs))
             write_jsonl(processed / "supplements.jsonl", [r for r in recs if r["status"] == "supplement"])
             (processed / "report.json").write_text(json.dumps({"as_of": "2026-10-23", "sources": [], "chunk_size": 1000, "chunk_overlap": 200}))
-            idx = root / "index"
             client = TestEmbeddings()
-            meta = build_index(processed, idx, model="test-only", embedding_client=client)
+            meta = build_index(processed, model="test-only", embedding_client=client)
             self.assertEqual(meta["vector_dimension"], 8)
-            store = load_index(idx, embedding_client=client)
-            result = search(idx, "검색 근거", store=store)
+            store = load_index(embedding_client=client)
+            result = search("검색 근거", store=store)
             self.assertEqual(result["hits"][0]["metadata"]["article"], "제1조")
             from law_pipeline.schema import validate_law_metadata
             stored = result["hits"][0]["metadata"]
             validate_law_metadata(stored)
             self.assertEqual(stored["ingested_at"], meta["ingested_at"])
-            self.assertEqual(read_jsonl(idx / "chunks.jsonl")[0]["metadata"], stored)
             self.assertEqual(result["sources"][0], {"type": "law", "title": "예시법", "article": "제1조", "page": 1,
                                                   "score": result["hits"][0]["score"]})
             for key in ("doc_type", "doc_id", "source_file", "category", "law_level", "ingested_at"):
@@ -173,11 +173,29 @@ class IndexTests(unittest.TestCase):
                     validate_law_metadata(broken)
             self.assertIn("예외 조건", str(result["supplementary_context"]))
             with self.assertRaises(ValueError):
-                build_index(processed, idx, embedding_client=client)
-            # Detect a mismatched sidecar before loading the pickle.
-            (idx / "supplements.jsonl").write_text("broken")
+                build_index(processed, model="test-only", embedding_client=client)
+            # Failed replacement leaves the committed collection searchable.
+            from core.vector_store import PgVectorStore
+            from langchain_core.documents import Document
+            with self.assertRaises(Exception):
+                store.write_vectors([Document(page_content="invalid", metadata={"chunk_id": "bad", "value": "\x00"})],
+                                    [[0.0] * 8], mode="replace")
+            self.assertEqual(search("검색 근거", store=store)["hits"][0]["metadata"], stored)
+            # Replacing one collection cannot remove the other source group.
+            web = PgVectorStore("web", model="test-only", embedding_client=client)
+            doc = Document(page_content="웹 근거", metadata={"source_file": "test.web"})
+            web.add_documents([doc], source_file="test.web")
+            web.add_documents([doc], source_file="test.web")
+            self.assertEqual(web.info()["vectors"], 1)
+            self.assertEqual(len(search("검색 근거", store=store)["hits"]), 1)
             with self.assertRaises(ValueError):
-                load_index(idx, embedding_client=client)
+                store.add_documents([doc])  # managed law collection rejects ad hoc uploads
+            wrong = PgVectorStore("pdf", model="different", embedding_client=client)
+            with self.assertRaises(ValueError):
+                wrong.similarity_search("검색 근거")
+            with self.assertRaises(ValueError):
+                store.write_vectors([doc], [[float("nan")]], mode="replace")
+
 
 
 if __name__ == "__main__":
