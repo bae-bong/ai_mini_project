@@ -25,6 +25,13 @@ def clean(s):
     s = html.unescape(re.sub(r"<[^>]+>", " ", s))
     return "\n".join(re.sub(r"[ \t\u00a0]+", " ", ln).strip() for ln in s.splitlines() if ln.strip())
 
+EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+PHONE_RE = re.compile(r"\(?0\d{1,2}\)?[-.\s]\d{3,4}[-.\s]\d{4}")
+
+def mask(s):
+    s = EMAIL_RE.sub("[이메일: 공고 원문 참조]", s)
+    return PHONE_RE.sub("[전화: 공고 원문 참조]", s)
+
 body = ParagraphStyle("b", fontName="Kor", fontSize=10, leading=15, wordWrap="CJK")
 head = ParagraphStyle("h", parent=body, fontSize=13, leading=19, spaceAfter=8)
 
@@ -37,8 +44,8 @@ for pid in IDS:
         ("수행기관", it.get("excInsttNm")),
         ("신청기간", it.get("reqstBeginEndDe")),
         ("지원대상", it.get("trgetNm")),
-        ("사업개요", clean(it.get("bsnsSumryCn"))),
-        ("신청방법", clean(it.get("reqstMthPapersCn"))),
+        ("사업개요", mask(clean(it.get("bsnsSumryCn")))),
+        ("신청방법", mask(clean(it.get("reqstMthPapersCn")))),
         ("공고 링크", it.get("pblancUrl")),
     ]
     story = [Paragraph(escape("공고 요약: " + (it.get("pblancNm") or "")), head)]
