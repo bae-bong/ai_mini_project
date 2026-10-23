@@ -72,6 +72,12 @@ app.add_middleware(
     allow_methods=["*"], allow_headers=["*"], allow_credentials=True,
 )
 
+# ✅ 공통 오류 처리 + 요청 로그
+from core.errors import register_error_handlers
+from core.logging_mw import add_logging_middleware
+register_error_handlers(app)
+add_logging_middleware(app)
+
 # ✅ 전역 벡터 저장소
 VECTORSTORE_WEB = None
 VECTORSTORE_PDF = None
