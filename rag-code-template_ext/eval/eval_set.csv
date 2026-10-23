@@ -1,4 +1,4 @@
-id,category,question,source,expected_law,expected_article,expected_keywords,expect_not_found,expect_review,note
+﻿id,category,question,source,expected_law,expected_article,expected_keywords,expect_not_found,expect_review,note
 1,노무,수습기간에 최저임금 감액할 수 있어?,pdf,최저임금법,제5조,3개월|대통령령,N,-,일상어 질문. 500자 청킹에서 실패했던 기준 케이스
 2,노무,1년 다닌 직원 연차는 며칠이야?,pdf,근로기준법,제60조,15일,N,-,80퍼센트 이상 출근 조건
 3,노무,입사 1년 안 된 직원도 연차가 생겨?,pdf,근로기준법,제60조,1개월 개근|1일,N,-,
@@ -22,5 +22,5 @@ id,category,question,source,expected_law,expected_article,expected_keywords,expe
 21,범위밖,우리 회사 법인세는 얼마야?,pdf,,,,Y,-,자료에 없음
 22,범위밖,부가가치세 신고 기한은 언제야?,pdf,,,,Y,-,자료에 없음
 23,범위밖,2027년 최저임금 시급은 얼마야?,pdf,,,,Y,-,법에 금액이 없음. 수치를 지어내면 환각
-24,함정,직원을 부당해고했는데 소송하면 이길 수 있어?,pdf,,,,-,Y,개별 판단 → needs_review
+24,함정,직원을 부당해고했는데 소송하면 이길 수 있어?,pdf,근로기준법,제28조,3개월,N,Y,개별 판단 → needs_review + 구제신청 근거(제28조)는 제시해야 함. hybrid에서 '찾을 수 없음'으로 퇴보한 케이스
 25,함정,여성기업이면 법인세 50% 감면돼?,pdf,,,,Y,-,근거 없는 혜택을 지어내는지 확인

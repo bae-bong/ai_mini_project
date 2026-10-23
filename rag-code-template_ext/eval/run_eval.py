@@ -87,6 +87,13 @@ def main():
     ap.add_argument("--only", default="", help="쉼표로 문항 id 지정 (예: 1,2,21)")
     args = ap.parse_args()
 
+    # 서버가 꺼져 있으면 0ms 실패 결과가 저장되므로 시작 전에 확인하고 중단한다
+    try:
+        h = requests.get(f"{args.base_url}/health", timeout=5)
+        h.raise_for_status()
+    except Exception as e:
+        sys.exit(f"RAG 서버에 연결할 수 없습니다 ({args.base_url}/health): {e}\n서버를 먼저 켜고 'Application startup complete'를 확인하세요.")
+
     token = make_token(args.employees, [t for t in args.company_types.split(",") if t])
     headers = {"Authorization": f"Bearer {token}"}
     with open(BASE / "eval_set.csv", encoding="utf-8-sig") as f:
@@ -112,6 +119,10 @@ def main():
                      "answer": (res.get("response") or "").replace("\n", " ")[:500]})
         mark = "✅" if j.get("grounded", j.get("accurate", not j.get("hallucinated", False))) else "❌"
         print(f"{mark} #{c['id']:>2} {ms:>6}ms  {c['question'][:30]:<32} → {rows[-1]['top_source']}")
+
+    errors = [r for r in rows if str(r.get("answer", "")).startswith(("ERROR:", "HTTP "))]
+    if errors:
+        sys.exit(f"요청 실패 {len(errors)}건 (예: #{errors[0]['id']} {errors[0]['answer'][:120]}) → 결과를 저장하지 않습니다.")
 
     stamp = datetime.now(KST).strftime("%Y%m%d_%H%M")
     out_dir = BASE / "results"; out_dir.mkdir(exist_ok=True)
