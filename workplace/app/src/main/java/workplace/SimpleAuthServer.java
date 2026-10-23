@@ -109,7 +109,7 @@ public class SimpleAuthServer {
 
     // ==== DB CONFIG (modify according to your environment) ==== //
     private static final String DB_URL = System.getenv().getOrDefault("DB_URL", "jdbc:mariadb://localhost:53301/sql_db");
-    private static final String DB_USER = "root";
+    private static final String DB_USER = System.getenv().getOrDefault("DB_USER", "root");
     private static final String DB_PASSWORD = System.getenv("DB_PASSWORD");
 
     // ==== SESSION STORE ==== //
@@ -133,7 +133,9 @@ public class SimpleAuthServer {
 
     public static void main(String[] args) throws Exception {
         // Load JDBC Driver
-        Class.forName("org.mariadb.jdbc.Driver");
+        Class.forName(DB_URL.startsWith("jdbc:postgresql")
+                ? "org.postgresql.Driver"
+                : "org.mariadb.jdbc.Driver");
 
         System.out.println("=== SimpleAuthServer v2026-02-03-REPLACED ===");
         System.out.println("Server started at http://localhost:8080");
