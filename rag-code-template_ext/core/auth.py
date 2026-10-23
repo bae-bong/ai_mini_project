@@ -7,10 +7,13 @@ JWT 검증 의존성 (Java 인증 서버 :8080 이 발급한 토큰을 검증)
 """
 import os
 
-from fastapi import Cookie, Header, HTTPException, status
+from fastapi import Cookie, Depends, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 
 JWT_ALGORITHM = "HS256"
+# Swagger(/docs) 의 Authorize 버튼용. 헤더가 없어도 바로 401 내지 않고 쿠키를 확인하도록 auto_error=False
+bearer_scheme = HTTPBearer(auto_error=False, description="로그인 응답의 accessToken")
 JWT_ISSUER = "simple-auth-server"             # Java JwtUtil.ISSUER
 
 
@@ -22,20 +25,21 @@ def _get_secret() -> str:
     return secret
 
 
-def _extract_token(cookie_token: str | None, authorization: str | None) -> str | None:
+def _extract_token(cookie_token: str | None,
+                   credentials: HTTPAuthorizationCredentials | None) -> str | None:
     """쿠키 우선, 없으면 Bearer 헤더에서 꺼낸다."""
     if cookie_token:
         return cookie_token
-    if authorization and authorization.lower().startswith("bearer "):
-        return authorization.split(" ", 1)[1].strip()
+    if credentials and credentials.credentials:
+        return credentials.credentials.strip() or None
     return None
 
 
 def get_current_user(
     access_token: str | None = Cookie(default=None, alias="ACCESS_TOKEN"),
-    authorization: str | None = Header(default=None),
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
 ) -> dict:
-    token = _extract_token(access_token, authorization)
+    token = _extract_token(access_token, credentials)
     if token is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
