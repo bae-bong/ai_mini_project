@@ -15,6 +15,8 @@ from pypdf import PdfReader
 from langchain_core.messages import HumanMessage
 from fastapi import Form
 from rag_meta import build_law_chunks
+from rag_answer import (search_law, law_sources, judge_needs_review, build_law_context,
+                        build_law_prompt, persona_applied, NOT_FOUND, REVIEW_NOTICE)
 
 # 패키지는 저자 업데이트에 맞춰 해당 버전으로 맞추는 것을 권장
 # 직접 저자의 site-packages/패키지명/을 직접 수정하는 것은 추천하지 않음
@@ -232,6 +234,9 @@ async def upload_pdf(
 ):
     if not file.filename.endswith(".pdf"):
         raise HTTPException(status_code=400, detail="PDF 파일만 허용됩니다.")
+    # law_pipeline이 만든 인덱스(manifest.json 존재)에는 섞지 않는다 (chunk_id·law_id 필드 불일치)
+    if os.path.exists("faiss_db/pdf/manifest.json"):
+        raise HTTPException(status_code=409, detail="법령 인덱스는 law_pipeline으로 관리됩니다. `python -m law_pipeline build`를 사용하세요.")
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
             tmp.write(await file.read())
@@ -284,6 +289,10 @@ class RAGRequest(BaseModel):
 class AnswerResponse(BaseModel):
     prompt: str
     response: str
+    needs_review: bool = False
+    review_reason: Optional[str] = None
+    persona_applied: Optional[Dict[str, Any]] = None
+    sources: List[Dict[str, Any]] = []
 
 # ✅ RAG 기반 질의 응답 처리
 from fastapi import Body
@@ -377,51 +386,42 @@ async def rag_query(
             # [Q04] 질문과 유사 문서 검색 연결
             # [설계 판단] 사용자 질문을 기준으로 선택된 벡터 저장소에서 상위 top_k개 문서와 거리 점수를 가져오세요.
             # [TODO Q04] 아래 ... 부분을 적절한 코드로 교체하세요.
-            docs_scores = vectorstore.similarity_search_with_score(rag_request.prompt, k=top_k)
+            # 페르소나: feat-auth-api 머지 후 current_user["persona"] 로 교체
+            persona = None
+
+            # [Q04] 법령 검색 (law_pipeline 머지 후 search_law 내부만 hybrid로 교체)
+            docs_scores = search_law(vectorstore, rag_request.prompt, top_k)
             print(f"[PDF 검색] 질문={rag_request.prompt!r}, 검색 문서 수={len(docs_scores)}")
             for i, (doc, score) in enumerate(docs_scores, start=1):
-                print(f"[PDF 검색 {i}] 거리={score:.5f}, 내용={doc.page_content[:300]!r}")
+                m = doc.metadata or {}
+                print(f"[PDF 검색 {i}] 거리={score:.5f}, {m.get('law_name')} {m.get('article_no')}, 내용={doc.page_content[:120]!r}")
 
-            if not docs_scores:
-                return AnswerResponse(prompt=rag_request.prompt, response="PDF 지식베이스에서 검색 결과를 찾을 수 없습니다.")
+            needs_review, review_reason = judge_needs_review(rag_request.prompt, docs_scores)
+            sources = law_sources(docs_scores)
 
-            # 임의의 거리 임계값을 제거하고 상위 검색 결과를 사용합니다.
-            # 기존 로직은 0.12 마진으로 문서를 과도하게 배제할 수 있었습니다.
-            MAX_CONTEXT_CHARS = 12000
-            chunks, total = [], 0
-            for i, (doc, _) in enumerate(docs_scores, start=1):
-                content = (doc.page_content or "").strip()
-                if not content:
-                    continue
-                remaining = MAX_CONTEXT_CHARS - total
-                if remaining <= 0:
-                    break
-                excerpt = content[:remaining]
-                chunks.append(f"[문서 {i}]\n{excerpt}")
-                total += len(excerpt)
-            context = "\n\n".join(chunks)
+            context = build_law_context(docs_scores)
             if not context.strip():
-                return AnswerResponse(prompt=rag_request.prompt, response="PDF에서 검색된 텍스트가 비어 있습니다.")
+                return AnswerResponse(prompt=rag_request.prompt, response=NOT_FOUND,
+                                      needs_review=True, review_reason="검색 근거 없음",
+                                      persona_applied=persona_applied(persona), sources=[])
 
-            full_prompt = (
-                "아래는 업로드된 PDF에서 검색한 내용입니다. PDF 내용에 근거해 한국어로 답변하세요. "
-                "질문이 한 단어 또는 주제명이라면 그 주제를 PDF에 근거해 설명하세요. "
-                "PDF에 없는 사실을 만들어 내지 마세요. 근거가 정말 없다면 'N/A'라고 답하세요.\n\n"
-                f"PDF 검색 내용:\n{context}\n\n"
-                f"질문: {rag_request.prompt}\n\n"
-                "답변:"
-            )
+            full_prompt = build_law_prompt(rag_request.prompt, context, persona)
             # [Q05] 검색 근거를 LLM 답변으로 연결
-            # [설계 판단] 검색한 PDF 내용이 포함된 full_prompt를 LLM에 전달하여 응답을 받아오세요.
-            # [TODO Q05] 아래 ... 부분을 적절한 코드로 교체하세요.
             raw = llm.invoke([HumanMessage(content=full_prompt)]).content
             raw = raw.strip() if isinstance(raw, str) else str(raw).strip()
             print(f"[PDF LLM 원본 응답] {raw[:1500]}")
-            # 마커가 없어도 LLM 원문을 답변으로 사용합니다.
             final = (extract_by_marker(raw) or raw).strip()
-            if not final or final.upper() == "N/A":
-                final = "PDF 지식베이스에서 답을 찾을 수 없습니다. 질문을 구체적으로 작성해 보세요."
-            return AnswerResponse(prompt=rag_request.prompt, response=final)
+
+            if not final or final.upper() == "N/A" or NOT_FOUND in final:
+                # 근거가 없다고 답했으면 출처를 붙이지 않는다 (근거 없는 출처 표시 방지)
+                return AnswerResponse(prompt=rag_request.prompt, response=NOT_FOUND,
+                                      needs_review=True, review_reason=review_reason or "근거에서 답을 찾지 못함",
+                                      persona_applied=persona_applied(persona), sources=[])
+            if needs_review:
+                final = f"{final}\n\n{REVIEW_NOTICE}"
+            return AnswerResponse(prompt=rag_request.prompt, response=final,
+                                  needs_review=needs_review, review_reason=review_reason,
+                                  persona_applied=persona_applied(persona), sources=sources)
 
         # -------------------- WEB 검색 --------------------
         elif source == "web":
