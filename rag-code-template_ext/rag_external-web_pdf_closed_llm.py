@@ -1,6 +1,7 @@
 #### 다음 실습 코드는 학습 목적으로만 사용 바랍니다. 문의 : audit@korea.ac.kr 임성열 Ph.D.
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, Query
+from fastapi import FastAPI, UploadFile, File, HTTPException, Query, Depends
+from core.auth import get_current_user
 from sqlalchemy.ext.asyncio import create_async_engine
 from fastapi.responses import JSONResponse
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -12,6 +13,10 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
 from pypdf import PdfReader
 from langchain_core.messages import HumanMessage
+from fastapi import Form
+from rag_meta import build_law_chunks
+from rag_answer import (search_law, law_sources, judge_needs_review, build_law_context,
+                        build_law_prompt, persona_applied, NOT_FOUND, REVIEW_NOTICE)
 
 # 패키지는 저자 업데이트에 맞춰 해당 버전으로 맞추는 것을 권장
 # 직접 저자의 site-packages/패키지명/을 직접 수정하는 것은 추천하지 않음
@@ -60,6 +65,13 @@ app = FastAPI(
     description="외부 정보 기반 벡터화 + LLM 질의 응답",
     version="1.0.0"
 )
+@app.get("/health", tags=["상태"])
+def health():
+    return {
+        "status": "ok",
+        "pdf_index": VECTORSTORE_PDF is not None,
+        "web_index": VECTORSTORE_WEB is not None,
+    }
 
 from fastapi.middleware.cors import CORSMiddleware
 app.add_middleware(
@@ -70,6 +82,18 @@ app.add_middleware(
                    "http://localhost:8001","*"],
     allow_methods=["*"], allow_headers=["*"], allow_credentials=True,
 )
+
+# ✅ 공통 오류 처리 + 요청 로그
+from core.errors import register_error_handlers
+from core.logging_mw import add_logging_middleware
+register_error_handlers(app)
+add_logging_middleware(app)
+
+
+# ✅ 로그인 사용자·페르소나 확인 (인증 필요)
+@app.get("/me", summary="토큰의 사용자·페르소나 확인", tags=["공통"])
+async def me(current_user: dict = Depends(get_current_user)):
+    return current_user
 
 # ✅ 전역 벡터 저장소
 VECTORSTORE_WEB = None
@@ -109,8 +133,11 @@ def load_paper(file_path: str) -> str:
     return "\n".join(text for page in reader.pages if (text := page.extract_text()))
 
 # ✅ 웹 검색 → 외부 정보 벡터화
-@app.post("/upload-topic", summary="웹 검색 → 외부 정보 벡터화", tags=["외부 정보"])
-async def upload_topic(topic: str = Query(..., description="검색할 주제")):
+# @app.post("/upload-topic", summary="웹 검색 → 외부 정보 벡터화", tags=["외부 정보"])
+async def upload_topic(
+    topic: str = Query(..., description="검색할 주제"),
+    current_user: dict = Depends(get_current_user),
+):
     try:
         import os, re, aiohttp
         from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -199,43 +226,50 @@ async def upload_topic(topic: str = Query(..., description="검색할 주제")):
         raise HTTPException(status_code=500, detail=str(e))
 
 # ✅ PDF 업로드 및 벡터화
-@app.post("/upload-paper", summary="PDF 업로드 및 벡터화", tags=["PDF 처리"]) 
-async def upload_pdf(file: UploadFile = File(...)):
+@app.post("/upload-paper", summary="법령 PDF 업로드 및 벡터화 (조 단위)", tags=["PDF 처리"])
+async def upload_pdf(
+    file: UploadFile = File(...),
+    category: str = Form("노무", description="노무 | 우대기업"),
+    current_user: dict = Depends(get_current_user),
+):
     if not file.filename.endswith(".pdf"):
         raise HTTPException(status_code=400, detail="PDF 파일만 허용됩니다.")
-
+    # law_pipeline이 만든 인덱스(manifest.json 존재)에는 섞지 않는다 (chunk_id·law_id 필드 불일치)
+    if os.path.exists("faiss_db/pdf/manifest.json"):
+        raise HTTPException(status_code=409, detail="법령 인덱스는 law_pipeline으로 관리됩니다. `python -m law_pipeline build`를 사용하세요.")
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
             tmp.write(await file.read())
             tmp_path = tmp.name
-
         try:
-            paper_text = load_paper(tmp_path)
+            chunks = build_law_chunks(tmp_path, file.filename, category)
         finally:
             os.unlink(tmp_path)
-        if not paper_text.strip():
+
+        if not chunks or not any(c["page_content"].strip() for c in chunks):
             raise HTTPException(status_code=422, detail="PDF에서 텍스트를 추출하지 못했습니다. 스캔 PDF라면 OCR이 필요합니다.")
-        # [Q01] PDF 청크 설계
-        # [설계 판단] PDF 전체 텍스트를 임베딩하기 전에 검색 가능한 작은 단위로 나누되, 청크 경계에서 정보가 끊어지지 않도록 일부 중첩을 둡니다. 이 서버의 PDF 청크 크기와 중첩 크기를 설정하세요.
-        # [TODO Q01] 아래 ... 부분을 적절한 코드로 교체하세요.
-        splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
-        docs = splitter.create_documents([paper_text], metadatas=[{"source": file.filename}])
+
+        # [Q01 개선] 고정 500자 → 조 단위 청킹(최대 1,000자, 중첩 150) + '법령명 조문(제목)' 머리글
+        docs = [Document(page_content=c["page_content"], metadata=c["metadata"]) for c in chunks]
 
         global VECTORSTORE_PDF
-        # [Q02] PDF 임베딩과 벡터 저장소 연결
-        # [설계 판단] 분할한 PDF 문서(docs)를 OpenAI 임베딩 모델로 벡터화하여 FAISS 검색 저장소로 만드세요.
-        # [TODO Q02] 아래 ... 부분을 적절한 코드로 교체하세요.
-        VECTORSTORE_PDF = FAISS.from_documents(docs, OpenAIEmbeddings())
+        # [Q02] 적재·검색 임베딩 모델 일치 (OpenAIEmbeddings)
+        new_store = FAISS.from_documents(docs, OpenAIEmbeddings())
+        if VECTORSTORE_PDF is None:
+            VECTORSTORE_PDF = new_store
+        else:
+            VECTORSTORE_PDF.merge_from(new_store)
 
         # ✅ 디스크에 저장
         os.makedirs("faiss_db/pdf", exist_ok=True)
         VECTORSTORE_PDF.save_local("faiss_db/pdf")
 
-        return JSONResponse(content={
-            "message": f"{len(docs)}개의 PDF 청크 벡터화 및 저장 완료",
-            "extracted_characters": len(paper_text),
-            "preview": paper_text[:300]
-        })
+        return {
+            "message": f"{len(docs)}개 조문 청크 적재 완료",
+            "law_name": docs[0].metadata["law_name"],
+            "articles": sum(1 for d in docs if d.metadata["article_no"]),
+            "sample_metadata": docs[min(5, len(docs) - 1)].metadata,
+        }
     except HTTPException:
         raise
     except Exception as e:
@@ -255,6 +289,10 @@ class RAGRequest(BaseModel):
 class AnswerResponse(BaseModel):
     prompt: str
     response: str
+    needs_review: bool = False
+    review_reason: Optional[str] = None
+    persona_applied: Optional[Dict[str, Any]] = None
+    sources: List[Dict[str, Any]] = []
 
 # ✅ RAG 기반 질의 응답 처리
 from fastapi import Body
@@ -304,7 +342,10 @@ def fallback_extract_from_context(context: str, question: str) -> str | None:
 
 # ✅ 질의 응답 라우터
 @app.post("/rag-query", response_model=AnswerResponse, summary="Closed Source LLM + 벡터 DB 질의", tags=["질의 응답"])
-async def rag_query(rag_request: RAGRequest = Body(...)):
+async def rag_query(
+    rag_request: RAGRequest = Body(...),
+    current_user: dict = Depends(get_current_user),
+):
     # 1. 벡터스토어 및 LLM 결정
     if rag_request.source == "web":
         if VECTORSTORE_WEB is None:
@@ -345,51 +386,42 @@ async def rag_query(rag_request: RAGRequest = Body(...)):
             # [Q04] 질문과 유사 문서 검색 연결
             # [설계 판단] 사용자 질문을 기준으로 선택된 벡터 저장소에서 상위 top_k개 문서와 거리 점수를 가져오세요.
             # [TODO Q04] 아래 ... 부분을 적절한 코드로 교체하세요.
-            docs_scores = vectorstore.similarity_search_with_score(rag_request.prompt, k=top_k)
+            # 페르소나: feat-auth-api 머지 후 current_user["persona"] 로 교체
+            persona = None
+
+            # [Q04] 법령 검색 (law_pipeline 머지 후 search_law 내부만 hybrid로 교체)
+            docs_scores = search_law(vectorstore, rag_request.prompt, top_k)
             print(f"[PDF 검색] 질문={rag_request.prompt!r}, 검색 문서 수={len(docs_scores)}")
             for i, (doc, score) in enumerate(docs_scores, start=1):
-                print(f"[PDF 검색 {i}] 거리={score:.5f}, 내용={doc.page_content[:300]!r}")
+                m = doc.metadata or {}
+                print(f"[PDF 검색 {i}] 거리={score:.5f}, {m.get('law_name')} {m.get('article_no')}, 내용={doc.page_content[:120]!r}")
 
-            if not docs_scores:
-                return AnswerResponse(prompt=rag_request.prompt, response="PDF 지식베이스에서 검색 결과를 찾을 수 없습니다.")
+            needs_review, review_reason = judge_needs_review(rag_request.prompt, docs_scores)
+            sources = law_sources(docs_scores)
 
-            # 임의의 거리 임계값을 제거하고 상위 검색 결과를 사용합니다.
-            # 기존 로직은 0.12 마진으로 문서를 과도하게 배제할 수 있었습니다.
-            MAX_CONTEXT_CHARS = 12000
-            chunks, total = [], 0
-            for i, (doc, _) in enumerate(docs_scores, start=1):
-                content = (doc.page_content or "").strip()
-                if not content:
-                    continue
-                remaining = MAX_CONTEXT_CHARS - total
-                if remaining <= 0:
-                    break
-                excerpt = content[:remaining]
-                chunks.append(f"[문서 {i}]\n{excerpt}")
-                total += len(excerpt)
-            context = "\n\n".join(chunks)
+            context = build_law_context(docs_scores)
             if not context.strip():
-                return AnswerResponse(prompt=rag_request.prompt, response="PDF에서 검색된 텍스트가 비어 있습니다.")
+                return AnswerResponse(prompt=rag_request.prompt, response=NOT_FOUND,
+                                      needs_review=True, review_reason="검색 근거 없음",
+                                      persona_applied=persona_applied(persona), sources=[])
 
-            full_prompt = (
-                "아래는 업로드된 PDF에서 검색한 내용입니다. PDF 내용에 근거해 한국어로 답변하세요. "
-                "질문이 한 단어 또는 주제명이라면 그 주제를 PDF에 근거해 설명하세요. "
-                "PDF에 없는 사실을 만들어 내지 마세요. 근거가 정말 없다면 'N/A'라고 답하세요.\n\n"
-                f"PDF 검색 내용:\n{context}\n\n"
-                f"질문: {rag_request.prompt}\n\n"
-                "답변:"
-            )
+            full_prompt = build_law_prompt(rag_request.prompt, context, persona)
             # [Q05] 검색 근거를 LLM 답변으로 연결
-            # [설계 판단] 검색한 PDF 내용이 포함된 full_prompt를 LLM에 전달하여 응답을 받아오세요.
-            # [TODO Q05] 아래 ... 부분을 적절한 코드로 교체하세요.
             raw = llm.invoke([HumanMessage(content=full_prompt)]).content
             raw = raw.strip() if isinstance(raw, str) else str(raw).strip()
             print(f"[PDF LLM 원본 응답] {raw[:1500]}")
-            # 마커가 없어도 LLM 원문을 답변으로 사용합니다.
             final = (extract_by_marker(raw) or raw).strip()
-            if not final or final.upper() == "N/A":
-                final = "PDF 지식베이스에서 답을 찾을 수 없습니다. 질문을 구체적으로 작성해 보세요."
-            return AnswerResponse(prompt=rag_request.prompt, response=final)
+
+            if not final or final.upper() == "N/A" or NOT_FOUND in final:
+                # 근거가 없다고 답했으면 출처를 붙이지 않는다 (근거 없는 출처 표시 방지)
+                return AnswerResponse(prompt=rag_request.prompt, response=NOT_FOUND,
+                                      needs_review=True, review_reason=review_reason or "근거에서 답을 찾지 못함",
+                                      persona_applied=persona_applied(persona), sources=[])
+            if needs_review:
+                final = f"{final}\n\n{REVIEW_NOTICE}"
+            return AnswerResponse(prompt=rag_request.prompt, response=final,
+                                  needs_review=needs_review, review_reason=review_reason,
+                                  persona_applied=persona_applied(persona), sources=sources)
 
         # -------------------- WEB 검색 --------------------
         elif source == "web":
