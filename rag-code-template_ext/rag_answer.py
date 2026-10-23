@@ -256,6 +256,15 @@ def persona_applied(persona: dict | None) -> dict | None:
 # ---------------------------------------------------------------------------
 # 공고(web) 검색·답변
 # ---------------------------------------------------------------------------
+def is_not_found(answer: str) -> bool:
+    """'자료에서 찾을 수 없음/없습니다' 등 변형까지 거절 답변으로 본다.
+    단, 일부만 없다고 하고 다른 공고를 안내하는 긴 답변은 거절로 보지 않는다."""
+    import re
+    if not answer or answer.strip().upper() == "N/A":
+        return True
+    return bool(re.search(r"자료에서\s*찾을\s*수\s*없", answer)) and len(answer) < 120
+
+
 def persona_matches(meta: dict, persona: dict | None) -> list[str]:
     """공고 대상 기업유형 ∩ 사용자 기업유형"""
     mine = set((persona or {}).get("company_types") or [])
@@ -275,7 +284,7 @@ def build_notice_context(docs_scores, persona: dict | None, max_chars: int = 120
     for doc, _ in docs_scores:
         m = doc.metadata or {}
         match = persona_matches(m, persona)
-        head = (f"[공고: {m.get('title')} | 접수상태: {notice_status(m.get('apply_end'))} | "
+        head = (f"[공고: {m.get('title')} | 접수상태: {notice_status(m.get('apply_end'), period_raw=m.get('period_raw'))} | "
                 f"신청기간: {m.get('period_raw') or '확인 필요'} | 대상유형: {', '.join(m.get('company_types') or []) or '미분류'}"
                 + (f" | 사용자 유형 일치: {', '.join(match)}" if match else "") + "]")
         block = f"{head}\n{doc.page_content}"
@@ -292,9 +301,11 @@ def build_notice_prompt(question: str, context: str, persona: dict | None) -> st
         "규칙:\n"
         "1. 아래 [공고]에 있는 내용만으로 한국어로 답한다. 지원금액·기간·자격을 만들지 않는다.\n"
         "2. 공고를 언급할 때마다 문장 끝에 (공고명) 형식으로 출처를 붙인다.\n"
-        "3. 접수상태가 '마감'인 공고는 마감되었다고 분명히 밝힌다. '기간 확인 필요'면 공고 원문 확인을 권한다.\n"
+        "3. 접수상태를 그대로 전한다. '마감'은 마감되었다고 밝히고, '상시접수'·'접수중(예산·모집 소진 시 마감)'은 지금 신청할 수 있으나 "
+        "조기 마감될 수 있다고 알린다. '세부사업별 상이'·'기간 확인 필요'는 공고 원문에서 기간을 확인하라고 한다.\n"
         "4. '사용자 유형 일치'가 표시된 공고를 먼저 안내하되, 자격 판단은 공고 원문 확인이 필요하다고 덧붙인다.\n"
-        f"5. 질문과 관련된 공고가 없으면 '{NOT_FOUND}'이라고만 답한다.\n\n"
+        "5. 질문 조건에 딱 맞지 않아도 관련 있는 공고가 있으면 그 공고와 접수상태를 안내하고 어떤 조건이 다른지 밝힌다.\n"
+        f"6. 질문과 관련된 공고가 전혀 없을 때만 '{NOT_FOUND}'이라고만 답한다.\n\n"
         f"{persona_note(persona)}\n\n"
         f"[공고]\n{context}\n\n"
         f"질문: {question}\n\n"
@@ -314,7 +325,7 @@ def notice_sources(docs_scores, answer: str | None = None, fallback: int = 3) ->
         seen.add(nid)
         out.append({"type": "notice", "notice_id": nid, "title": m.get("title"), "agency": m.get("agency"),
                     "period": m.get("period_raw"), "apply_end": m.get("apply_end"),
-                    "status": notice_status(m.get("apply_end")), "company_types": m.get("company_types") or [],
+                    "status": notice_status(m.get("apply_end"), period_raw=m.get("period_raw")), "company_types": m.get("company_types") or [],
                     "url": m.get("url"), "page": m.get("page"), "score": round(float(score), 4)})
     if answer is None:
         return out

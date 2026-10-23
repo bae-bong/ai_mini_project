@@ -163,12 +163,20 @@ def parse_period(raw: str | None):
     return None, None
 
 
-def notice_status(period_end: str | None, today: date | None = None) -> str:
-    """질문 시점 기준 접수 상태. 저장하지 않고 매번 계산한다."""
-    if not period_end:
-        return "기간 확인 필요"
-    today = today or datetime.now(KST).date()
-    return "접수중" if date.fromisoformat(period_end) >= today else "마감"
+def notice_status(period_end: str | None, today: date | None = None, period_raw: str | None = None) -> str:
+    """질문 시점 기준 접수 상태. 저장하지 않고 매번 계산한다.
+    날짜가 없는 공고는 기업마당 기간 문구로 판단 (상시 접수·예산 소진시까지·모집 완료시·세부사업별 상이)."""
+    if period_end:
+        today = today or datetime.now(KST).date()
+        return "접수중" if date.fromisoformat(period_end) >= today else "마감"
+    raw = period_raw or ""
+    if "상시" in raw:
+        return "상시접수"
+    if "소진" in raw or "완료" in raw:
+        return "접수중(예산·모집 소진 시 마감)"
+    if "상이" in raw:
+        return "세부사업별 상이"
+    return "기간 확인 필요"
 
 
 # ---------------------------------------------------------------------------
@@ -182,7 +190,16 @@ COMPANY_TYPE_ALIASES = {"청년창업": "청년창업기업", "창업": "창업�
                         "벤처": "벤처기업", "소·중기업": "소기업·중소기업", "중소기업": "소기업·중소기업"}
 
 
+# HWP→PDF 변환본 등에서 나오는 NUL(0x00)·제어문자는 PostgreSQL text에 저장할 수 없어 제거
+_CTRL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
+def strip_ctrl(text):
+    return _CTRL_RE.sub("", text) if isinstance(text, str) else text
+
+
 def notice_base_metadata(meta: dict) -> dict:
+    meta = {k: strip_ctrl(v) for k, v in meta.items()}
     nid = str(meta.get("notice_id") or "").strip()
     title = str(meta.get("title") or "").strip()
     if not NOTICE_ID_RE.match(nid) or not title:
@@ -216,6 +233,7 @@ def build_notice_chunks(meta: dict, pdf_path: str | None = None, filename: str |
     → 같은 공고·같은 파일을 다시 올리면 그 청크만 교체된다."""
     from langchain_text_splitters import RecursiveCharacterTextSplitter
 
+    meta = {k: strip_ctrl(v) for k, v in meta.items()}
     base = notice_base_metadata(meta)
     nid, head = base["notice_id"], f"[공고] {base['title']}\n"
     extra = "".join(f"\n{k}: {str(meta[f]).strip()}" for k, f in (("사업개요", "summary"), ("신청방법", "apply_how"))
@@ -229,7 +247,7 @@ def build_notice_chunks(meta: dict, pdf_path: str | None = None, filename: str |
         source_file = f"{nid}/{filename}"
         splitter = RecursiveCharacterTextSplitter(chunk_size=max_chars, chunk_overlap=overlap)
         for page_no, page in enumerate(PdfReader(pdf_path).pages, start=1):
-            text = re.sub(r"[ \t]+", " ", page.extract_text() or "").strip()
+            text = re.sub(r"[ \t]+", " ", strip_ctrl(page.extract_text() or "")).strip()
             for piece in splitter.split_text(text) if text else []:
                 i = len(body)
                 body.append({"page_content": head + piece,

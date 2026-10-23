@@ -19,7 +19,8 @@ from rag_answer import (search_law, law_sources, judge_needs_review, build_law_c
                         retrieved_list, PROMPT_VERSION,
                         QUERY_REWRITE, search_law_pipeline, cited_sources,
                         USE_SYNONYMS, expand_query,
-                        rank_notices_for_persona, build_notice_context, build_notice_prompt, notice_sources)
+                        rank_notices_for_persona, build_notice_context, build_notice_prompt, notice_sources,
+                        is_not_found)
 
 # 패키지는 저자 업데이트에 맞춰 해당 버전으로 맞추는 것을 권장
 # 직접 저자의 site-packages/패키지명/을 직접 수정하는 것은 추천하지 않음
@@ -488,7 +489,7 @@ async def rag_query(
 
             raw = llm.invoke([HumanMessage(content=build_notice_prompt(rag_request.prompt, context, persona))]).content
             final = (raw.strip() if isinstance(raw, str) else str(raw).strip())
-            if not final or NOT_FOUND in final:
+            if is_not_found(final):
                 return AnswerResponse(prompt=rag_request.prompt, response=NOT_FOUND,
                                       persona_applied=persona_applied(persona), sources=[],
                                       retrieved=retrieved, config=run_config)
