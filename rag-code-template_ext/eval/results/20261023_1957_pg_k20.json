@@ -1,0 +1,46 @@
+{
+  "label": "pg_k20",
+  "time": "20261023_1957",
+  "top_k": 20,
+  "repeat": 1,
+  "employees": null,
+  "n": 2,
+  "config": "{\"search\": \"hybrid\", \"prompt\": \"v2\", \"top_k\": 20, \"temperature\": 0.0, \"seed\": 42, \"query_rewrite\": false, \"rewritten\": null}",
+  "grounded_rate": {
+    "mean": 0.5,
+    "min": 0.5,
+    "max": 0.5
+  },
+  "accuracy_rate": {
+    "mean": 1.0,
+    "min": 1.0,
+    "max": 1.0
+  },
+  "hallucination_rate": null,
+  "review_detect_rate": null,
+  "latency_ms_p50": {
+    "mean": 6707.0,
+    "min": 6707,
+    "max": 6707
+  },
+  "latency_ms_max": {
+    "mean": 6707.0,
+    "min": 6707,
+    "max": 6707
+  },
+  "flaky_ids": [],
+  "runs": [
+    {
+      "grounded_rate": 0.5,
+      "grounded_n": 2,
+      "accuracy_rate": 1.0,
+      "accuracy_n": 2,
+      "hallucination_rate": null,
+      "hallucination_n": 0,
+      "review_detect_rate": null,
+      "review_n": 0,
+      "latency_ms_p50": 6707,
+      "latency_ms_max": 6707
+    }
+  ]
+}

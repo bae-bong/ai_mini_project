@@ -125,7 +125,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--base-url", default=os.getenv("RAG_BASE_URL", "http://localhost:8001"))
     ap.add_argument("--label", default="run")
-    ap.add_argument("--top-k", type=int, default=5)
+    ap.add_argument("--top-k", type=int, default=20)
     ap.add_argument("--repeat", type=int, default=1, help="같은 설정 반복 횟수 (평균·범위 보고)")
     ap.add_argument("--employees", type=int, default=None)
     ap.add_argument("--company-types", default="")
