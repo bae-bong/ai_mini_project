@@ -44,6 +44,31 @@ def search_law(vectorstore, question: str, k: int, mode: str | None = None):
     return [ranked[i] for i in order]
 
 
+def search_law_pipeline(vectorstore, question: str, k: int, mode: str | None = None) -> dict:
+    """pgvector 컬렉션 검색 (law_pipeline 계약: hits·sources·supplementary_context·needs_review).
+    hybrid RRF는 위 search_law와 같은 방식이며 PgVectorStore.retrieve 안에서 수행된다."""
+    from law_pipeline.index import search
+    return search(question, k, store=vectorstore, mode=mode or SEARCH_MODE)
+
+
+def cited_sources(sources: list[dict], answer: str, fallback: int = 3) -> list[dict]:
+    """답변에 실제로 인용된 조문만 남긴다 (같은 법령·조문 중복 제거).
+    - '제60조'가 '제60조의2'에 잘못 걸리지 않게 뒤에 '의'가 오면 제외
+    - 답변에 법령명이 나오면 그 법령의 조문만 남김 (여러 법에 같은 조 번호가 있을 때)
+    - 인용을 하나도 못 찾으면 상위 fallback개"""
+    import re
+    seen, uniq = set(), []
+    for s in sources:
+        key = (s.get("title"), s.get("article"))
+        if key not in seen:
+            seen.add(key)
+            uniq.append(s)
+    cited = [s for s in uniq if s.get("article")
+             and re.search(re.escape(s["article"]) + r"(?!의)", answer)]
+    named = [s for s in cited if s.get("title") and s["title"] in answer]
+    return named or cited or uniq[:fallback]
+
+
 # 질문 재작성(multi-query): 일상어 질문을 법률 용어로 바꿔 한 번 더 검색
 # 실험 결과(2026-10-23): 13번 미해결, 정확성 93.8→85.4%, 응답 2.0→3.4초 → 기본 꺼둠
 QUERY_REWRITE = os.getenv("RAG_QUERY_REWRITE", "0") == "1"

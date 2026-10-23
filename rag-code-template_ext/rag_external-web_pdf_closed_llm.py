@@ -17,7 +17,7 @@ from rag_meta import build_law_chunks
 from rag_answer import (search_law, law_sources, judge_needs_review, build_law_context,
                         build_law_prompt, persona_applied, NOT_FOUND, REVIEW_NOTICE,
                         retrieved_list, PROMPT_VERSION,
-                        QUERY_REWRITE, rewrite_query, search_law_multi)
+                        QUERY_REWRITE, search_law_pipeline, cited_sources)
 
 # 패키지는 저자 업데이트에 맞춰 해당 버전으로 맞추는 것을 권장
 # 직접 저자의 site-packages/패키지명/을 직접 수정하는 것은 추천하지 않음
@@ -244,7 +244,7 @@ async def upload_pdf(
 class RAGRequest(BaseModel):
     prompt: str = Field(default=..., description="질문 프롬프트")
     source: str = Field(default=..., description="web | pdf")
-    top_k: int = Field(default=5, ge=1, le=20, description="검색할 결과 수 (기본값 5)")
+    top_k: int = Field(default=20, ge=1, le=20, description="검색할 결과 수 (기본값 20)")
 
     class Config:
         validate_by_name = True
@@ -356,10 +356,11 @@ async def rag_query(
             persona = current_user.get("persona")
 
             # [Q04] 법령 검색 (law_pipeline 머지 후 search_law 내부만 hybrid로 교체)
-            rewritten = rewrite_query(llm, rag_request.prompt) if QUERY_REWRITE else None
-            queries = [rag_request.prompt] + ([rewritten] if rewritten else [])
-            print(f"[질문 재작성] {rewritten!r}")
-            docs_scores = search_law_multi(vectorstore, queries, top_k)
+            # 질문 재작성은 실험 결과 기각(RAG_QUERY_REWRITE=0) → pgvector + law_pipeline 검색만 사용
+            rewritten = None
+            retrieval = search_law_pipeline(vectorstore, rag_request.prompt, top_k)
+            docs_scores = [(Document(page_content=h["text"], metadata=h["metadata"]), h["score"])
+                           for h in retrieval["hits"]]
             print(f"[PDF 검색] 질문={rag_request.prompt!r}, 검색 문서 수={len(docs_scores)}")
             for i, (doc, score) in enumerate(docs_scores, start=1):
                 m = doc.metadata or {}
@@ -398,6 +399,7 @@ async def rag_query(
                                       needs_review=True, review_reason=review_reason or "근거에서 답을 찾지 못함",
                                       persona_applied=persona_applied(persona), sources=[],
                                       retrieved=retrieved, config=run_config)
+            sources = cited_sources(sources, final)   # 답변에 인용된 조문만
             if needs_review:
                 final = f"{final}\n\n{REVIEW_NOTICE}"
             return AnswerResponse(prompt=rag_request.prompt, response=final,
