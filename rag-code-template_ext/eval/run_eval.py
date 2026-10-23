@@ -60,10 +60,12 @@ def judge(row, res):
                  and norm(row["expected_law"]) in norm(s.get("title"))]
         out["grounded_rank"] = ranks[0] if ranks else None
     # 정확성: 기대 키워드가 답에 모두 있는가 (키워드가 비면 판정 안 함)
+    # 키워드는 '|'로 AND, 한 키워드 안의 '/'는 같은 뜻의 대체 표현(OR). 예: 100분의 100/100%
     kws = [k for k in row["expected_keywords"].split("|") if k]
     if kws:
-        out["accurate"] = all(norm(k) in norm(answer) for k in kws)
-        out["missing_keywords"] = "|".join(k for k in kws if norm(k) not in norm(answer))
+        hit = lambda k: any(norm(alt) in norm(answer) for alt in k.split("/") if alt)
+        out["accurate"] = all(hit(k) for k in kws)
+        out["missing_keywords"] = "|".join(k for k in kws if not hit(k))
     # 환각: 자료에 없는 질문에 '찾을 수 없음'이라고 했는가
     if row["expect_not_found"] == "Y":
         out["hallucinated"] = not not_found

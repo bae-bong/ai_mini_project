@@ -17,7 +17,8 @@ from fastapi import Form
 from rag_meta import build_law_chunks
 from rag_answer import (search_law, law_sources, judge_needs_review, build_law_context,
                         build_law_prompt, persona_applied, NOT_FOUND, REVIEW_NOTICE,
-                        retrieved_list, PROMPT_VERSION)
+                        retrieved_list, PROMPT_VERSION,
+                        QUERY_REWRITE, rewrite_query, search_law_multi)
 
 # 패키지는 저자 업데이트에 맞춰 해당 버전으로 맞추는 것을 권장
 # 직접 저자의 site-packages/패키지명/을 직접 수정하는 것은 추천하지 않음
@@ -398,7 +399,10 @@ async def rag_query(
             persona = None
 
             # [Q04] 법령 검색 (law_pipeline 머지 후 search_law 내부만 hybrid로 교체)
-            docs_scores = search_law(vectorstore, rag_request.prompt, top_k)
+            rewritten = rewrite_query(llm, rag_request.prompt) if QUERY_REWRITE else None
+            queries = [rag_request.prompt] + ([rewritten] if rewritten else [])
+            print(f"[질문 재작성] {rewritten!r}")
+            docs_scores = search_law_multi(vectorstore, queries, top_k)
             print(f"[PDF 검색] 질문={rag_request.prompt!r}, 검색 문서 수={len(docs_scores)}")
             for i, (doc, score) in enumerate(docs_scores, start=1):
                 m = doc.metadata or {}
@@ -408,7 +412,8 @@ async def rag_query(
             sources = law_sources(docs_scores)
 
             run_config = {"search": os.getenv("RAG_SEARCH_MODE", "hybrid"), "prompt": PROMPT_VERSION,
-                          "top_k": top_k, "temperature": LLM_TEMPERATURE, "seed": LLM_SEED}
+                          "top_k": top_k, "temperature": LLM_TEMPERATURE, "seed": LLM_SEED,
+                          "query_rewrite": QUERY_REWRITE, "rewritten": rewritten}
             retrieved = retrieved_list(docs_scores)
 
             context = build_law_context(docs_scores)

@@ -1,0 +1,78 @@
+{
+  "label": "rewrite_x3",
+  "time": "20261023_1759",
+  "top_k": 5,
+  "repeat": 3,
+  "employees": null,
+  "n": 25,
+  "config": "{\"search\": \"hybrid\", \"prompt\": \"v2\", \"top_k\": 5, \"temperature\": 0.0, \"seed\": 42, \"query_rewrite\": true, \"rewritten\": \"수습기간 최저임금 감액 가능 여부\"}",
+  "grounded_rate": {
+    "mean": 0.952,
+    "min": 0.952,
+    "max": 0.952
+  },
+  "accuracy_rate": {
+    "mean": 0.854,
+    "min": 0.812,
+    "max": 0.875
+  },
+  "hallucination_rate": {
+    "mean": 0.0,
+    "min": 0.0,
+    "max": 0.0
+  },
+  "review_detect_rate": {
+    "mean": 1.0,
+    "min": 1.0,
+    "max": 1.0
+  },
+  "latency_ms_p50": {
+    "mean": 3416.667,
+    "min": 3317,
+    "max": 3522
+  },
+  "latency_ms_max": {
+    "mean": 5979.333,
+    "min": 5348,
+    "max": 6558
+  },
+  "flaky_ids": [],
+  "runs": [
+    {
+      "grounded_rate": 0.952,
+      "grounded_n": 21,
+      "accuracy_rate": 0.812,
+      "accuracy_n": 16,
+      "hallucination_rate": 0.0,
+      "hallucination_n": 4,
+      "review_detect_rate": 1.0,
+      "review_n": 1,
+      "latency_ms_p50": 3411,
+      "latency_ms_max": 6558
+    },
+    {
+      "grounded_rate": 0.952,
+      "grounded_n": 21,
+      "accuracy_rate": 0.875,
+      "accuracy_n": 16,
+      "hallucination_rate": 0.0,
+      "hallucination_n": 4,
+      "review_detect_rate": 1.0,
+      "review_n": 1,
+      "latency_ms_p50": 3522,
+      "latency_ms_max": 6032
+    },
+    {
+      "grounded_rate": 0.952,
+      "grounded_n": 21,
+      "accuracy_rate": 0.875,
+      "accuracy_n": 16,
+      "hallucination_rate": 0.0,
+      "hallucination_n": 4,
+      "review_detect_rate": 1.0,
+      "review_n": 1,
+      "latency_ms_p50": 3317,
+      "latency_ms_max": 5348
+    }
+  ]
+}

@@ -44,6 +44,47 @@ def search_law(vectorstore, question: str, k: int, mode: str | None = None):
     return [ranked[i] for i in order]
 
 
+# 질문 재작성(multi-query): 일상어 질문을 법률 용어로 바꿔 한 번 더 검색
+QUERY_REWRITE = os.getenv("RAG_QUERY_REWRITE", "1") == "1"
+
+_REWRITE_PROMPT = (
+    "다음 질문을 한국 법령 조문에서 검색하기 좋은 검색어 한 줄로 바꿔라.\n"
+    "- 일상어를 법령에 쓰이는 용어로 바꾼다 (예: 사장님→사용자, 직원→근로자, 월급→임금).\n"
+    "- 질문에 없는 사실·수치·결론을 추가하지 않는다. 답을 쓰지 않는다.\n"
+    "- 검색어만 출력한다.\n\n"
+    "질문: {q}\n검색어:"
+)
+
+
+def rewrite_query(llm, question: str) -> str | None:
+    try:
+        out = llm.invoke(_REWRITE_PROMPT.format(q=question)).content.strip().splitlines()[0].strip()
+        return out if out and out != question else None
+    except Exception as e:
+        print(f"[질문 재작성 실패] {e}")
+        return None
+
+
+def _doc_key(doc):
+    m = doc.metadata or {}
+    return (m.get("law_name") or m.get("title"), m.get("article_no"), m.get("item_no"), m.get("chunk_index"))
+
+
+def search_law_multi(vectorstore, queries: list[str], k: int):
+    """여러 검색어로 각각 hybrid 검색 → 순위 RRF 합산. 거리는 가장 가까운 값을 유지."""
+    if len(queries) == 1:
+        return search_law(vectorstore, queries[0], k)
+    fused, best = {}, {}
+    for q in queries:
+        for rank, (doc, dist) in enumerate(search_law(vectorstore, q, k * 2)):
+            key = _doc_key(doc)
+            fused[key] = fused.get(key, 0) + 1 / (60 + rank + 1)
+            if key not in best or dist < best[key][1]:
+                best[key] = (doc, dist)
+    order = sorted(fused, key=lambda key: -fused[key])[:k]
+    return [best[key] for key in order]
+
+
 def law_sources(docs_scores) -> list[dict]:
     """같은 법령·조문은 한 번만 (가장 가까운 점수 유지)."""
     seen, out = set(), []
