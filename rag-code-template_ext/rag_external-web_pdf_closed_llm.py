@@ -2,10 +2,9 @@
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Query, Depends
 from core.auth import get_current_user
-from sqlalchemy.ext.asyncio import create_async_engine
 from fastapi.responses import JSONResponse
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.vectorstores import FAISS
+from core.vector_store import PgVectorStore
 from langchain_openai import ChatOpenAI
 from langchain_openai import OpenAIEmbeddings
 from pydantic import BaseModel, Field
@@ -14,9 +13,13 @@ from langchain_core.documents import Document
 from pypdf import PdfReader
 from langchain_core.messages import HumanMessage
 from fastapi import Form
-from rag_meta import build_law_chunks
+from rag_meta import build_law_chunks, build_notice_chunks
 from rag_answer import (search_law, law_sources, judge_needs_review, build_law_context,
-                        build_law_prompt, persona_applied, NOT_FOUND, REVIEW_NOTICE)
+                        build_law_prompt, persona_applied, NOT_FOUND, REVIEW_NOTICE,
+                        retrieved_list, PROMPT_VERSION,
+                        QUERY_REWRITE, search_law_pipeline, cited_sources,
+                        USE_SYNONYMS, expand_query,
+                        rank_notices_for_persona, build_notice_context, build_notice_prompt, notice_sources)
 
 # 패키지는 저자 업데이트에 맞춰 해당 버전으로 맞추는 것을 권장
 # 직접 저자의 site-packages/패키지명/을 직접 수정하는 것은 추천하지 않음
@@ -52,12 +55,13 @@ load_dotenv(BASE_DIR / ".env")
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
+# 답변 재현성: 같은 질문에 같은 답 (평가 수치 안정). 실험 비교 시 RAG_TEMPERATURE 로 변경
+LLM_TEMPERATURE = float(os.getenv("RAG_TEMPERATURE", "0"))
+# seed: OpenAI의 best-effort 결정성 (temperature 0만으로는 답이 흔들림)
+LLM_SEED = int(os.getenv("RAG_SEED", "42"))
+
 if not OPENAI_API_KEY:
     raise RuntimeError("OPENAI_API_KEY가 설정되지 않았습니다.")
-
-# ✅ DB 연결 정보
-ASYNC_DB_URL = os.getenv("ASYNC_DB_URL", "mysql+aiomysql://root:password@127.0.0.1:53301/sql_db?charset=utf8mb4")
-engine = create_async_engine(ASYNC_DB_URL)
 
 # ✅ FastAPI 인스턴스
 app = FastAPI(
@@ -67,11 +71,14 @@ app = FastAPI(
 )
 @app.get("/health", tags=["상태"])
 def health():
-    return {
-        "status": "ok",
-        "pdf_index": VECTORSTORE_PDF is not None,
-        "web_index": VECTORSTORE_WEB is not None,
-    }
+    try:
+        pdf = VECTORSTORE_PDF.info()
+        web = VECTORSTORE_WEB.info()
+    except Exception:
+        raise HTTPException(status_code=503, detail="PostgreSQL 상태 확인 실패")
+    return {"status": "ok", "storage": "pgvector",
+            "pdf_index": bool(pdf and pdf["vectors"]),
+            "web_index": bool(web and web["vectors"])}
 
 from fastapi.middleware.cors import CORSMiddleware
 app.add_middleware(
@@ -79,7 +86,7 @@ app.add_middleware(
     allow_origins=["http://localhost:5174",
                    "http://127.0.0.1:5174",
                    "http://[::1]:5174",         # IPv6도 허용
-                   "http://localhost:8001","*"],
+                   "http://localhost:8001"],
     allow_methods=["*"], allow_headers=["*"], allow_credentials=True,
 )
 
@@ -95,37 +102,10 @@ add_logging_middleware(app)
 async def me(current_user: dict = Depends(get_current_user)):
     return current_user
 
-# ✅ 전역 벡터 저장소
-VECTORSTORE_WEB = None
-VECTORSTORE_PDF = None
-
-# 벡터 스토어 전역 변수
-VECTORSTORE_WEB = None
-VECTORSTORE_PDF = None
-
-# ✅ 외부 (웹검색, OpenAI 전용)
-web_path = "faiss_db/web"
-if os.path.exists(f"{web_path}/index.faiss") and os.path.exists(f"{web_path}/index.pkl"):
-    VECTORSTORE_WEB = FAISS.load_local(
-        web_path,
-        embeddings=OpenAIEmbeddings(),
-        allow_dangerous_deserialization=True
-    )
-    print("✅ VECTORSTORE_WEB 로드 완료")
-else:
-    print("❌ VECTORSTORE_WEB 벡터화된 파일이 없습니다.")
-
-# ✅ PDF (업로드용, OpenAI 전용)
-pdf_path = "faiss_db/pdf"
-if os.path.exists(f"{pdf_path}/index.faiss") and os.path.exists(f"{pdf_path}/index.pkl"):
-    VECTORSTORE_PDF = FAISS.load_local(
-        pdf_path,
-        embeddings=OpenAIEmbeddings(),  # ← 오타 수정
-        allow_dangerous_deserialization=True
-    )
-    print("✅ VECTORSTORE_PDF 로드 완료")
-else:
-    print("❌ VECTORSTORE_PDF 벡터화된 파일이 없습니다.")
+# Collections are queried from PostgreSQL on every request; CLI ingestion is
+# visible immediately without restarting the RAG server.
+VECTORSTORE_WEB = PgVectorStore("web")
+VECTORSTORE_PDF = PgVectorStore("pdf")
 
 # ✅ PDF 텍스트 추출
 def load_paper(file_path: str) -> str:
@@ -141,7 +121,6 @@ async def upload_topic(
     try:
         import os, re, aiohttp
         from langchain_text_splitters import RecursiveCharacterTextSplitter
-        from langchain_community.vectorstores import FAISS
         from langchain_openai import OpenAIEmbeddings
 
         # ---- 1) 네이버 뉴스 검색: headers/params 전달 + 페이지네이션 ----
@@ -207,14 +186,9 @@ async def upload_topic(
         if not docs:
             return {"message": "벡터화할 문서가 없습니다.", "collected": len(items)}
 
-        # ---- 4) 벡터화 ----
-        global VECTORSTORE_WEB
-        VECTORSTORE_WEB = FAISS.from_documents(docs, OpenAIEmbeddings())
-
-        # ---- 5) 디스크 저장 ----
-        save_path = "faiss_db/web"
-        os.makedirs(save_path, exist_ok=True)
-        VECTORSTORE_WEB.save_local(save_path)
+        # Keep this legacy collector disabled; persist its results in pgvector.
+        vectors = VECTORSTORE_WEB._client().embed_documents([d.page_content for d in docs])
+        VECTORSTORE_WEB.write_vectors(docs, vectors, mode="replace")
 
         return {
             "message": f"{len(docs)}개의 웹 문서(청크) 벡터화 및 저장 완료",
@@ -232,16 +206,18 @@ async def upload_pdf(
     category: str = Form("노무", description="노무 | 우대기업"),
     current_user: dict = Depends(get_current_user),
 ):
-    if not file.filename.endswith(".pdf"):
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="PDF 파일만 허용됩니다.")
-    # law_pipeline이 만든 인덱스(manifest.json 존재)에는 섞지 않는다 (chunk_id·law_id 필드 불일치)
-    if os.path.exists("faiss_db/pdf/manifest.json"):
-        raise HTTPException(status_code=409, detail="법령 인덱스는 law_pipeline으로 관리됩니다. `python -m law_pipeline build`를 사용하세요.")
+    info = VECTORSTORE_PDF.info()
+    if info and info["manifest"].get("managed_by") == "law_pipeline":
+        raise HTTPException(status_code=409, detail="법령 컬렉션은 law_pipeline build로 관리됩니다.")
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
             tmp.write(await file.read())
             tmp_path = tmp.name
         try:
+            if not load_paper(tmp_path).strip():
+                raise HTTPException(status_code=422, detail="PDF에서 텍스트를 추출하지 못했습니다.")
             chunks = build_law_chunks(tmp_path, file.filename, category)
         finally:
             os.unlink(tmp_path)
@@ -252,17 +228,7 @@ async def upload_pdf(
         # [Q01 개선] 고정 500자 → 조 단위 청킹(최대 1,000자, 중첩 150) + '법령명 조문(제목)' 머리글
         docs = [Document(page_content=c["page_content"], metadata=c["metadata"]) for c in chunks]
 
-        global VECTORSTORE_PDF
-        # [Q02] 적재·검색 임베딩 모델 일치 (OpenAIEmbeddings)
-        new_store = FAISS.from_documents(docs, OpenAIEmbeddings())
-        if VECTORSTORE_PDF is None:
-            VECTORSTORE_PDF = new_store
-        else:
-            VECTORSTORE_PDF.merge_from(new_store)
-
-        # ✅ 디스크에 저장
-        os.makedirs("faiss_db/pdf", exist_ok=True)
-        VECTORSTORE_PDF.save_local("faiss_db/pdf")
+        VECTORSTORE_PDF.add_documents(docs, source_file=file.filename)
 
         return {
             "message": f"{len(docs)}개 조문 청크 적재 완료",
@@ -275,12 +241,64 @@ async def upload_pdf(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/upload-notice", summary="지원사업 공고(meta JSON + 첨부 PDF) 적재·덮어쓰기", tags=["공고"])
+async def upload_notice(
+    meta: str = Form(..., description="tools/make_notice_meta.py 가 만든 공고 meta JSON 문자열"),
+    file: Optional[UploadFile] = File(None, description="공고 첨부 PDF (선택)"),
+    current_user: dict = Depends(get_current_user),
+):
+    """같은 notice_id + 파일명으로 다시 올리면 해당 청크만 교체된다.
+    - 개요(meta) 청크: source_file = '{notice_id}/_meta'
+    - 첨부 PDF 청크: source_file = '{notice_id}/{파일명}'"""
+    try:
+        meta_obj = json.loads(meta)
+        if not isinstance(meta_obj, dict):
+            raise ValueError
+    except ValueError:
+        raise HTTPException(status_code=400, detail="meta는 JSON 객체 문자열이어야 합니다.")
+    if file is not None and file.filename and not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="첨부는 PDF만 허용됩니다. (HWP는 tools/hwp_to_pdf.py로 변환)")
+
+    tmp_path = None
+    try:
+        if file is not None and file.filename:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+                tmp.write(await file.read())
+                tmp_path = tmp.name
+        try:
+            overview, body = build_notice_chunks(meta_obj, tmp_path, file.filename if tmp_path else None)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        finally:
+            if tmp_path:
+                os.unlink(tmp_path)
+
+        to_docs = lambda cs: [Document(page_content=c["page_content"], metadata=c["metadata"]) for c in cs]
+        VECTORSTORE_WEB.add_documents(to_docs(overview), source_file=overview[0]["metadata"]["source_file"])
+        body_note = None
+        if body:
+            VECTORSTORE_WEB.add_documents(to_docs(body), source_file=body[0]["metadata"]["source_file"])
+        elif tmp_path:
+            body_note = "첨부 PDF에서 텍스트를 추출하지 못해 개요만 적재했습니다 (이미지 PDF면 OCR 필요)."
+        m = overview[0]["metadata"]
+        return {"message": f"공고 적재 완료: 개요 1개 + 본문 {len(body)}개 청크",
+                "notice_id": m["notice_id"], "title": m["title"],
+                "apply_start": m["apply_start"], "apply_end": m["apply_end"],
+                "company_types": m["company_types"],
+                "replaced_keys": [overview[0]["metadata"]["source_file"]] + ([body[0]["metadata"]["source_file"]] if body else []),
+                "note": body_note}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # 질의 요청/응답 모델 정의
 # ✅ 질의 요청 모델
 class RAGRequest(BaseModel):
     prompt: str = Field(default=..., description="질문 프롬프트")
     source: str = Field(default=..., description="web | pdf")
-    top_k: int = Field(default=5, ge=1, description="검색할 결과 수 (기본값 5)")
+    top_k: int = Field(default=20, ge=1, le=20, description="검색할 결과 수 (기본값 20)")
 
     class Config:
         validate_by_name = True
@@ -293,6 +311,8 @@ class AnswerResponse(BaseModel):
     review_reason: Optional[str] = None
     persona_applied: Optional[Dict[str, Any]] = None
     sources: List[Dict[str, Any]] = []
+    retrieved: List[Dict[str, Any]] = []   # 검색 후보 (답을 못 찾아도 남김, 원인 분석용)
+    config: Dict[str, Any] = {}            # 실험 설정 기록 (검색 방식·프롬프트·top_k)
 
 # ✅ RAG 기반 질의 응답 처리
 from fastapi import Body
@@ -348,17 +368,17 @@ async def rag_query(
 ):
     # 1. 벡터스토어 및 LLM 결정
     if rag_request.source == "web":
-        if VECTORSTORE_WEB is None:
+        if not (VECTORSTORE_WEB.info() or {}).get("vectors"):
             raise HTTPException(
                 status_code=400,
                 detail="❗ 외부 WEB 벡터값이 로딩되지 않았습니다. 먼저 외부 정보를 수집해서 벡터화를 진행해주세요.",
             )
         vectorstore = VECTORSTORE_WEB
-        llm = ChatOpenAI(model="gpt-4o", temperature=0.3)
+        llm = ChatOpenAI(model="gpt-4o", temperature=LLM_TEMPERATURE, seed=LLM_SEED)
         llm_type = "openai" # huggingface
 
     elif rag_request.source == "pdf":
-        if VECTORSTORE_PDF is None:
+        if not (VECTORSTORE_PDF.info() or {}).get("vectors"):
             raise HTTPException(
                 status_code=400,
                 detail="❗ PDF 벡터값이 로딩되지 않았습니다. 먼저 PDF 파일을 벡터화해주세요.",
@@ -367,7 +387,7 @@ async def rag_query(
         # [설계 판단] 사용자가 source="pdf"를 선택하면 웹 저장소가 아니라 PDF 저장소를 검색하도록 연결하세요.
         # [TODO Q03] 아래 ... 부분을 적절한 코드로 교체하세요.
         vectorstore = VECTORSTORE_PDF
-        llm = ChatOpenAI(model="gpt-4o", temperature=0.3)
+        llm = ChatOpenAI(model="gpt-4o", temperature=LLM_TEMPERATURE, seed=LLM_SEED)
         llm_type = "openai"
 
     else:
@@ -379,7 +399,7 @@ async def rag_query(
     # 2. 검색 및 LLM 응답 생성
     try:
         source = rag_request.source
-        top_k = max(5, (rag_request.top_k or 5))
+        top_k = rag_request.top_k
 
         # -------------------- PDF: 검색 결과 확인 + 안정적인 응답 처리 --------------------
         if source == "pdf":
@@ -387,115 +407,95 @@ async def rag_query(
             # [설계 판단] 사용자 질문을 기준으로 선택된 벡터 저장소에서 상위 top_k개 문서와 거리 점수를 가져오세요.
             # [TODO Q04] 아래 ... 부분을 적절한 코드로 교체하세요.
             # 페르소나: feat-auth-api 머지 후 current_user["persona"] 로 교체
-            persona = None
+            persona = current_user.get("persona")
 
             # [Q04] 법령 검색 (law_pipeline 머지 후 search_law 내부만 hybrid로 교체)
-            docs_scores = search_law(vectorstore, rag_request.prompt, top_k)
+            # 질문 재작성은 실험 결과 기각(RAG_QUERY_REWRITE=0) → pgvector + law_pipeline 검색만 사용
+            rewritten = expand_query(rag_request.prompt) if USE_SYNONYMS else None
+            if rewritten == rag_request.prompt:
+                rewritten = None
+            print(f"[검색어 확장] {rewritten!r}")
+            retrieval = search_law_pipeline(vectorstore, rewritten or rag_request.prompt, top_k)
+            docs_scores = [(Document(page_content=h["text"], metadata=h["metadata"]), h["score"])
+                           for h in retrieval["hits"]]
             print(f"[PDF 검색] 질문={rag_request.prompt!r}, 검색 문서 수={len(docs_scores)}")
             for i, (doc, score) in enumerate(docs_scores, start=1):
                 m = doc.metadata or {}
                 print(f"[PDF 검색 {i}] 거리={score:.5f}, {m.get('law_name')} {m.get('article_no')}, 내용={doc.page_content[:120]!r}")
 
             needs_review, review_reason = judge_needs_review(rag_request.prompt, docs_scores)
-            sources = law_sources(docs_scores)
+            sources = retrieval["sources"]
+            if retrieval["needs_review"]:
+                needs_review = True
+                review_reason = review_reason or "적용례·부칙 확인 필요"
+
+            run_config = {"search": os.getenv("RAG_SEARCH_MODE", "hybrid"), "prompt": PROMPT_VERSION,
+                          "top_k": top_k, "temperature": LLM_TEMPERATURE, "seed": LLM_SEED,
+                          "query_rewrite": QUERY_REWRITE, "synonyms": USE_SYNONYMS, "rewritten": rewritten}
+            retrieved = retrieved_list(docs_scores)
 
             context = build_law_context(docs_scores)
+            supplementary = "\n\n".join(r["text"] for r in retrieval["supplementary_context"])
+            if supplementary:
+                context += "\n\n[관련 부칙·적용례]\n" + supplementary[:6000]
             if not context.strip():
                 return AnswerResponse(prompt=rag_request.prompt, response=NOT_FOUND,
                                       needs_review=True, review_reason="검색 근거 없음",
-                                      persona_applied=persona_applied(persona), sources=[])
+                                      persona_applied=persona_applied(persona), sources=[],
+                                      retrieved=retrieved, config=run_config)
 
             full_prompt = build_law_prompt(rag_request.prompt, context, persona)
             # [Q05] 검색 근거를 LLM 답변으로 연결
             raw = llm.invoke([HumanMessage(content=full_prompt)]).content
             raw = raw.strip() if isinstance(raw, str) else str(raw).strip()
-            print(f"[PDF LLM 원본 응답] {raw[:1500]}")
             final = (extract_by_marker(raw) or raw).strip()
 
             if not final or final.upper() == "N/A" or NOT_FOUND in final:
                 # 근거가 없다고 답했으면 출처를 붙이지 않는다 (근거 없는 출처 표시 방지)
                 return AnswerResponse(prompt=rag_request.prompt, response=NOT_FOUND,
                                       needs_review=True, review_reason=review_reason or "근거에서 답을 찾지 못함",
-                                      persona_applied=persona_applied(persona), sources=[])
+                                      persona_applied=persona_applied(persona), sources=[],
+                                      retrieved=retrieved, config=run_config)
+            sources = cited_sources(sources, final)   # 답변에 인용된 조문만
             if needs_review:
                 final = f"{final}\n\n{REVIEW_NOTICE}"
             return AnswerResponse(prompt=rag_request.prompt, response=final,
                                   needs_review=needs_review, review_reason=review_reason,
-                                  persona_applied=persona_applied(persona), sources=sources)
+                                  persona_applied=persona_applied(persona), sources=sources,
+                                  retrieved=retrieved, config=run_config)
 
         # -------------------- WEB 검색 --------------------
         elif source == "web":
-            q = rag_request.prompt or ""
-            # 한글 포함 여부 간단 판별
-            has_korean = any('\uac00' <= ch <= '\ud7a3' for ch in q)
-            merged = []
+            # 공고 검색: pgvector + BM25 hybrid (법령과 같은 방식), 페르소나 기업유형 일치 공고 우선
+            persona = current_user.get("persona")
+            rewritten = expand_query(rag_request.prompt) if USE_SYNONYMS else None
+            if rewritten == rag_request.prompt:
+                rewritten = None
+            ranked = vectorstore.retrieve(rewritten or rag_request.prompt, top_k, hybrid=True)["ranked"]
+            docs_scores = rank_notices_for_persona(ranked, persona)
+            run_config = {"search": "hybrid", "collection": "web", "top_k": top_k,
+                          "temperature": LLM_TEMPERATURE, "seed": LLM_SEED,
+                          "synonyms": USE_SYNONYMS, "rewritten": rewritten}
+            retrieved = [{"rank": i, "notice_id": (d.metadata or {}).get("notice_id"),
+                          "title": (d.metadata or {}).get("title"), "page": (d.metadata or {}).get("page"),
+                          "score": round(float(sc), 4)} for i, (d, sc) in enumerate(docs_scores, start=1)]
 
-            def limited_context(docs, limit_chars=4000):
-                buf, total = [], 0
-                for d in docs:
-                    pc = getattr(d, "page_content", "") or ""
-                    if not pc.strip():
-                        continue
-                    if total + len(pc) > limit_chars:
-                        break
-                    buf.append(pc); total += len(pc)
-                return "\n\n".join(buf)
-
-            # 1차: 원문 질의
-            docs1 = vectorstore.similarity_search(q, k=top_k)
-            merged.extend(docs1)
-
-            # 2차: 한국어 → 영어 번역 질의(실 서비스에서는 번역 API 사용 권장)
-            q_en = q
-            try:
-                if has_korean:
-                    q_en = q  # TODO: 실제 번역 적용
-                    docs2 = vectorstore.similarity_search(q_en, k=top_k)
-                    merged.extend(docs2)
-            except Exception:
-                pass  # 번역/검색 실패 시 무시
-
-            # 중복 제거(간단히 page_content 기준)
-            seen, merged_uniq = set(), []
-            for d in merged:
-                key = getattr(d, "page_content", "")
-                if key and key not in seen:
-                    seen.add(key); merged_uniq.append(d)
-
-            if not merged_uniq:
-                return AnswerResponse(prompt=rag_request.prompt,
-                                    response="웹 검색 기반 지식베이스에서 충분한 결과를 찾지 못했습니다. 키워드를 달리하여 다시 시도해 주십시오.")
-
-            context = limited_context(merged_uniq, limit_chars=4000)
+            context = build_notice_context(docs_scores, persona)
             if not context.strip():
-                return AnswerResponse(prompt=rag_request.prompt,
-                                    response="웹 검색 기반 지식베이스에서 충분한 결과를 찾지 못했습니다. 키워드를 달리하여 다시 시도해 주십시오.")
+                return AnswerResponse(prompt=rag_request.prompt, response=NOT_FOUND,
+                                      persona_applied=persona_applied(persona), sources=[],
+                                      retrieved=retrieved, config=run_config)
 
-            # 인용 유도, N/A 강제는 사용하지 않음
-            full_prompt = (
-                "아래 컨텍스트에서만 답변을 작성하시오. 컨텍스트에 없는 내용은 추측하지 마시오. "
-                "가능하면 문장 끝에 간단한 출처 표기를 괄호로 덧붙이시오(예: (출처 1), (출처 2)).\n"
-                f"{context}\n\n"
-                f"질문: {rag_request.prompt}\n\n"
-                "### ANSWER_START\n"
-                "<정답(간결한 한국어, 필요 시 간단한 출처 표기)>\n"
-                "### ANSWER_END"
-            )
-
-            if llm_type == "huggingface": # Embedding 시, bge_embedder 사용한 경우에 선택 권고
-                out = text_generator(full_prompt, max_new_tokens=200, do_sample=False, return_full_text=False) #  temperature=0.0 제거
-                raw = (out[0].get("generated_text") or "").strip()
-                answer = extract_by_marker(raw)
-                if not answer and 0 < len(raw) <= 500 and '###' not in raw:
-                    answer = raw
-            else:
-                raw = llm.invoke([HumanMessage(content=full_prompt)]).content.strip()
-                answer = extract_by_marker(raw) or raw
-
-            final = (answer or "").strip()
-            if final == "":
-                final = "웹 검색 기반 지식베이스에서 충분한 결과를 찾지 못했습니다. 키워드를 달리하여 다시 시도해 주십시오."
-            return AnswerResponse(prompt=rag_request.prompt, response=final)
+            raw = llm.invoke([HumanMessage(content=build_notice_prompt(rag_request.prompt, context, persona))]).content
+            final = (raw.strip() if isinstance(raw, str) else str(raw).strip())
+            if not final or NOT_FOUND in final:
+                return AnswerResponse(prompt=rag_request.prompt, response=NOT_FOUND,
+                                      persona_applied=persona_applied(persona), sources=[],
+                                      retrieved=retrieved, config=run_config)
+            return AnswerResponse(prompt=rag_request.prompt, response=final,
+                                  persona_applied=persona_applied(persona),
+                                  sources=notice_sources(docs_scores, final),
+                                  retrieved=retrieved, config=run_config)
 
         # -------------------- 기타 --------------------
         else:

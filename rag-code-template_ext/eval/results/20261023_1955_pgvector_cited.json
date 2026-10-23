@@ -1,0 +1,54 @@
+{
+  "label": "pgvector_cited",
+  "time": "20261023_1955",
+  "top_k": 15,
+  "repeat": 1,
+  "employees": null,
+  "n": 25,
+  "config": "{\"search\": \"hybrid\", \"prompt\": \"v2\", \"top_k\": 15, \"temperature\": 0.0, \"seed\": 42, \"query_rewrite\": false, \"rewritten\": null}",
+  "grounded_rate": {
+    "mean": 0.905,
+    "min": 0.905,
+    "max": 0.905
+  },
+  "accuracy_rate": {
+    "mean": 0.875,
+    "min": 0.875,
+    "max": 0.875
+  },
+  "hallucination_rate": {
+    "mean": 0.0,
+    "min": 0.0,
+    "max": 0.0
+  },
+  "review_detect_rate": {
+    "mean": 1.0,
+    "min": 1.0,
+    "max": 1.0
+  },
+  "latency_ms_p50": {
+    "mean": 2253.0,
+    "min": 2253,
+    "max": 2253
+  },
+  "latency_ms_max": {
+    "mean": 5176.0,
+    "min": 5176,
+    "max": 5176
+  },
+  "flaky_ids": [],
+  "runs": [
+    {
+      "grounded_rate": 0.905,
+      "grounded_n": 21,
+      "accuracy_rate": 0.875,
+      "accuracy_n": 16,
+      "hallucination_rate": 0.0,
+      "hallucination_n": 4,
+      "review_detect_rate": 1.0,
+      "review_n": 1,
+      "latency_ms_p50": 2253,
+      "latency_ms_max": 5176
+    }
+  ]
+}

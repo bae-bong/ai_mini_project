@@ -3,6 +3,7 @@
 - 법령 PDF: 머리말 제거 → 조 단위 분할 → 긴 조문은 재분할 → 메타데이터 부착
 - 공고: 신청기간 파싱, 마감 여부 계산
 """
+import os
 import re
 import unicodedata
 from datetime import date, datetime, timezone, timedelta
@@ -87,7 +88,26 @@ def split_law_articles(pages: list[tuple[int, str]]) -> list[dict]:
     return arts
 
 
-def build_law_chunks(path: str, filename: str, category: str, max_chars: int = 1000, overlap: int = 150) -> list[dict]:
+# 정의 조항의 각 호: 줄 맨 앞 "6. “퇴직급여제도”란", "1의2. "…"란" (번호 뒤 따옴표로 시작해야 호로 인정)
+DEF_ITEM_RE = re.compile(r'^\s*(\d+(?:의\d+)?)\.\s*[“"「]', re.M)
+
+
+def split_definition_items(article_text: str) -> list[tuple[str | None, str]]:
+    """정의 조항을 호 단위로 나눈다. [(호 번호, 텍스트)] — 첫 원소는 머리 문장(호 번호 None).
+    정의 조항이 아니거나 호가 2개 미만이면 [(None, 전체)]."""
+    hits = list(DEF_ITEM_RE.finditer(article_text))
+    if len(hits) < 2:
+        return [(None, article_text)]
+    intro = article_text[: hits[0].start()].strip()
+    out = []
+    for i, m in enumerate(hits):
+        end = hits[i + 1].start() if i + 1 < len(hits) else len(article_text)
+        out.append((m.group(1), article_text[m.start():end].strip()))
+    return [(None, intro)] + out if intro else out
+
+
+def build_law_chunks(path: str, filename: str, category: str, max_chars: int = 1000, overlap: int = 150,
+                     split_definitions: bool = os.getenv("RAG_SPLIT_DEFINITIONS", "1") == "1") -> list[dict]:
     """조 단위 청크 + 메타데이터. 반환: [{"page_content":..., "metadata":{...}}]"""
     filename = unicodedata.normalize("NFC", filename)
     info = law_info_from_filename(filename)
@@ -97,9 +117,15 @@ def build_law_chunks(path: str, filename: str, category: str, max_chars: int = 1
     chunks, idx = [], 0
     for a in arts:
         body = a["text"]
-        pieces = [body] if len(body) <= max_chars else [body[s:s + max_chars] for s in range(0, len(body), max_chars - overlap)]
-        for piece in pieces:
-            head = f"[{info['law_name']} {a['article_no'] or ''}{'(' + a['article_title'] + ')' if a['article_title'] else ''}]".replace(" ]", "]")
+        # 정의 조항은 호 단위로 쪼갠다 (용어 십수 개가 한 청크에 묻히는 문제)
+        if split_definitions and a["article_title"] and "정의" in a["article_title"]:
+            units = split_definition_items(body)
+        else:
+            units = [(None, body)]
+        for item_no, unit in units:
+          pieces = [unit] if len(unit) <= max_chars else [unit[s:s + max_chars] for s in range(0, len(unit), max_chars - overlap)]
+          for piece in pieces:
+            head = f"[{info['law_name']} {a['article_no'] or ''}{'(' + a['article_title'] + ')' if a['article_title'] else ''}{' ' + item_no + '호' if item_no else ''}]".replace(" ]", "]")
             chunks.append({
                 # 검색 정확도를 위해 본문 앞에 '법령명 조문(제목)'을 붙인다
                 "page_content": f"{head}\n{piece}",
@@ -117,6 +143,7 @@ def build_law_chunks(path: str, filename: str, category: str, max_chars: int = 1
                     "article_no": a["article_no"],
                     "article_title": a["article_title"],
                     "effective_date": info["effective_date"],
+                    "item_no": item_no,
                 },
             })
             idx += 1
@@ -142,3 +169,71 @@ def notice_status(period_end: str | None, today: date | None = None) -> str:
         return "기간 확인 필요"
     today = today or datetime.now(KST).date()
     return "접수중" if date.fromisoformat(period_end) >= today else "마감"
+
+
+# ---------------------------------------------------------------------------
+# 공고 (기업마당 bizinfo) — 은빈 tools/make_notice_meta.py 의 meta JSON 형식을 그대로 받는다
+# {"notice_id", "title", "agency", "executor", "period_raw", "target", "field", "company_types", "url"}
+# 선택: "summary"(사업개요), "apply_how"(신청방법) — 개요 청크 본문에만 들어감
+# ---------------------------------------------------------------------------
+NOTICE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{4,64}$")
+# 공고 분류 라벨(make_notice_meta.py) → 회원가입 페르소나 기업유형(frontend/assets/app.js)으로 통일
+COMPANY_TYPE_ALIASES = {"청년창업": "청년창업기업", "창업": "창업기업", "벤처·이노비즈": "벤처기업",
+                        "벤처": "벤처기업", "소·중기업": "소기업·중소기업", "중소기업": "소기업·중소기업"}
+
+
+def notice_base_metadata(meta: dict) -> dict:
+    nid = str(meta.get("notice_id") or "").strip()
+    title = str(meta.get("title") or "").strip()
+    if not NOTICE_ID_RE.match(nid) or not title:
+        raise ValueError("meta에 notice_id(영문·숫자·_-)와 title이 필요합니다.")
+    start, end = parse_period(meta.get("period_raw"))
+    types = meta.get("company_types") or []
+    if isinstance(types, str):
+        types = [t.strip() for t in types.split(",") if t.strip()]
+    types = list(dict.fromkeys(COMPANY_TYPE_ALIASES.get(t, t) for t in types))
+    return {
+        "doc_type": "notice", "type": "notice", "doc_id": f"notice:{nid}", "notice_id": nid,
+        "title": title, "agency": meta.get("agency"), "executor": meta.get("executor"),
+        "period_raw": meta.get("period_raw"), "apply_start": start, "apply_end": end,
+        "target": meta.get("target"), "field": meta.get("field"),
+        "company_types": types, "url": meta.get("url"),
+        "ingested_at": datetime.now(KST).isoformat(timespec="seconds"),
+    }
+
+
+def notice_overview_text(base: dict) -> str:
+    rows = [("공고명", base["title"]), ("소관기관", base.get("agency")), ("수행기관", base.get("executor")),
+            ("신청기간", base.get("period_raw")), ("지원대상", base.get("target")),
+            ("지원분야", base.get("field")), ("대상 기업유형", ", ".join(base.get("company_types") or []))]
+    return "\n".join(f"{k}: {v}" for k, v in rows if v)
+
+
+def build_notice_chunks(meta: dict, pdf_path: str | None = None, filename: str | None = None,
+                        max_chars: int = 1000, overlap: int = 200) -> tuple[list[dict], list[dict]]:
+    """(개요 청크, 첨부 본문 청크) 반환.
+    덮어쓰기 키 source_file: 개요 = '{notice_id}/_meta', 첨부 = '{notice_id}/{파일명}'
+    → 같은 공고·같은 파일을 다시 올리면 그 청크만 교체된다."""
+    from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+    base = notice_base_metadata(meta)
+    nid, head = base["notice_id"], f"[공고] {base['title']}\n"
+    extra = "".join(f"\n{k}: {str(meta[f]).strip()}" for k, f in (("사업개요", "summary"), ("신청방법", "apply_how"))
+                    if meta.get(f) and str(meta[f]).strip())
+    overview = [{"page_content": head + notice_overview_text(base) + extra,
+                 "metadata": {**base, "source_file": f"{nid}/_meta", "section": "overview",
+                              "page": 0, "chunk_index": 0, "chunk_id": f"{nid}/_meta-0"}}]
+    body = []
+    if pdf_path:
+        filename = unicodedata.normalize("NFC", (filename or "attachment.pdf").rsplit("/", 1)[-1])
+        source_file = f"{nid}/{filename}"
+        splitter = RecursiveCharacterTextSplitter(chunk_size=max_chars, chunk_overlap=overlap)
+        for page_no, page in enumerate(PdfReader(pdf_path).pages, start=1):
+            text = re.sub(r"[ \t]+", " ", page.extract_text() or "").strip()
+            for piece in splitter.split_text(text) if text else []:
+                i = len(body)
+                body.append({"page_content": head + piece,
+                             "metadata": {**base, "source_file": source_file, "section": "body",
+                                          "page": page_no, "chunk_index": i,
+                                          "chunk_id": f"{source_file}-{i}"}})
+    return overview, body

@@ -15,4 +15,12 @@ uploads/
 *.webm
 faiss_db/
 bin/
-rag-code-template_ext/data/
+
+# Reproducible law-pipeline outputs
+rag-code-template_ext/data/laws/processed/
+
+# Legacy local copies; canonical PDFs are under upload-paper/
+rag-code-template_ext/data/laws/raw/
+backups/
+*.pem
+*.key

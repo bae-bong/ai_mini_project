@@ -1,0 +1,9 @@
+.git
+.gradle
+**/build
+**/.env
+**/*.env
+**/*.pem
+**/*.key
+.idea
+.vscode

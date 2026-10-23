@@ -1,0 +1,78 @@
+{
+  "label": "hybrid_v2prompt_x3",
+  "time": "20261023_1743",
+  "top_k": 5,
+  "repeat": 3,
+  "employees": null,
+  "n": 25,
+  "config": "{\"search\": \"hybrid\", \"prompt\": \"v2\", \"top_k\": 5, \"temperature\": 0.0, \"seed\": 42}",
+  "grounded_rate": {
+    "mean": 0.905,
+    "min": 0.905,
+    "max": 0.905
+  },
+  "accuracy_rate": {
+    "mean": 0.854,
+    "min": 0.812,
+    "max": 0.875
+  },
+  "hallucination_rate": {
+    "mean": 0.0,
+    "min": 0.0,
+    "max": 0.0
+  },
+  "review_detect_rate": {
+    "mean": 1.0,
+    "min": 1.0,
+    "max": 1.0
+  },
+  "latency_ms_p50": {
+    "mean": 2168.0,
+    "min": 2118,
+    "max": 2257
+  },
+  "latency_ms_max": {
+    "mean": 4493.333,
+    "min": 3912,
+    "max": 5086
+  },
+  "flaky_ids": [],
+  "runs": [
+    {
+      "grounded_rate": 0.905,
+      "grounded_n": 21,
+      "accuracy_rate": 0.875,
+      "accuracy_n": 16,
+      "hallucination_rate": 0.0,
+      "hallucination_n": 4,
+      "review_detect_rate": 1.0,
+      "review_n": 1,
+      "latency_ms_p50": 2129,
+      "latency_ms_max": 4482
+    },
+    {
+      "grounded_rate": 0.905,
+      "grounded_n": 21,
+      "accuracy_rate": 0.875,
+      "accuracy_n": 16,
+      "hallucination_rate": 0.0,
+      "hallucination_n": 4,
+      "review_detect_rate": 1.0,
+      "review_n": 1,
+      "latency_ms_p50": 2118,
+      "latency_ms_max": 3912
+    },
+    {
+      "grounded_rate": 0.905,
+      "grounded_n": 21,
+      "accuracy_rate": 0.812,
+      "accuracy_n": 16,
+      "hallucination_rate": 0.0,
+      "hallucination_n": 4,
+      "review_detect_rate": 1.0,
+      "review_n": 1,
+      "latency_ms_p50": 2257,
+      "latency_ms_max": 5086
+    }
+  ]
+}
