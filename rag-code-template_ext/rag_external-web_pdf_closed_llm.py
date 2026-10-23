@@ -74,12 +74,12 @@ def health():
     }
 
 from fastapi.middleware.cors import CORSMiddleware
+# ✅ CORS: 쿠키 인증을 쓰므로 "*" 금지. 허용 주소는 .env 의 CORS_ORIGINS (쉼표 구분)
+_DEFAULT_ORIGINS = "http://localhost:5174,http://127.0.0.1:5174,http://localhost:5173,http://localhost:8080,http://localhost:8008,http://localhost"
+CORS_ORIGINS = [o.strip() for o in os.getenv("CORS_ORIGINS", _DEFAULT_ORIGINS).split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5174",
-                   "http://127.0.0.1:5174",
-                   "http://[::1]:5174",         # IPv6도 허용
-                   "http://localhost:8001","*"],
+    allow_origins=CORS_ORIGINS,
     allow_methods=["*"], allow_headers=["*"], allow_credentials=True,
 )
 
@@ -91,7 +91,17 @@ add_logging_middleware(app)
 
 
 # ✅ 로그인 사용자·페르소나 확인 (인증 필요)
-@app.get("/me", summary="토큰의 사용자·페르소나 확인", tags=["공통"])
+class Persona(BaseModel):
+    employees: Optional[int] = Field(None, description="상시근로자 수", examples=[3])
+    company_types: List[str] = Field(default_factory=list, description="기업 유형", examples=[["여성기업", "창업기업"]])
+
+class MeResponse(BaseModel):
+    id: int = Field(..., examples=[2])
+    username: str = Field(..., examples=["check01"])
+    persona: Persona
+
+@app.get("/me", response_model=MeResponse, summary="토큰의 사용자·페르소나 확인", tags=["공통"],
+         responses={401: {"description": "토큰 없음 · 서명 불일치 · 만료"}})
 async def me(current_user: dict = Depends(get_current_user)):
     return current_user
 
@@ -386,8 +396,8 @@ async def rag_query(
             # [Q04] 질문과 유사 문서 검색 연결
             # [설계 판단] 사용자 질문을 기준으로 선택된 벡터 저장소에서 상위 top_k개 문서와 거리 점수를 가져오세요.
             # [TODO Q04] 아래 ... 부분을 적절한 코드로 교체하세요.
-            # 페르소나: feat-auth-api 머지 후 current_user["persona"] 로 교체
-            persona = None
+            # 페르소나: JWT claim → core/auth.py 가 만든 current_user["persona"]
+            persona = current_user.get("persona")
 
             # [Q04] 법령 검색 (law_pipeline 머지 후 search_law 내부만 hybrid로 교체)
             docs_scores = search_law(vectorstore, rag_request.prompt, top_k)

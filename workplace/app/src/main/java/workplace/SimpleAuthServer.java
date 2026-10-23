@@ -138,6 +138,19 @@ public class SimpleAuthServer {
                 : "org.mariadb.jdbc.Driver");
 
         System.out.println("=== SimpleAuthServer v2026-02-03-REPLACED ===");
+
+        // 필수 환경변수 확인: 빠지면 로그인 시점이 아니라 시작 시점에 바로 알린다
+        java.util.List<String> missing = new java.util.ArrayList<>();
+        for (String key : new String[]{"JWT_SECRET", "DB_PASSWORD"}) {
+            String v = System.getenv(key);
+            if (v == null || v.isBlank()) missing.add(key);
+        }
+        if (!missing.isEmpty()) {
+            System.err.println("[CONFIG] 필수 환경변수가 없습니다: " + missing);
+            System.err.println("[CONFIG] 예) export JWT_SECRET=... ; export DB_PASSWORD=...");
+            System.exit(1);
+        }
+        System.out.println("[CONFIG] DB_URL=" + DB_URL + ", DB_USER=" + DB_USER);
         System.out.println("Server started at http://localhost:8080");
 
         //  어떤 계층이 DB 접근을 담당해야 하는가? Repository 구현체를 생성하여 서비스와 연결하세요.
