@@ -11,3 +11,5 @@
 ## 배포
 
 배포 준비 및 실행 방법: [deploy/README.md](deploy/README.md)
+
+필수 화면 구성 및 프론트 반영 방법: [frontend/README.md](frontend/README.md)

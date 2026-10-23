@@ -49,6 +49,10 @@ def main():
         assert request("/healthz") == "ok\n"
         assert "<html" in request("/").lower()
         assert "Vue" in request("/external_index.html")
+        for path in ("/login", "/signup", "/chat", "/documents"):
+            assert 'id="app"' in request(path)
+        assert "createApp" in request("/assets/app.js")
+        assert "Vue" in request("/assets/vendor/vue.global.prod.js")
         assert sql("SELECT extversion FROM pg_extension WHERE extname='vector'")
         assert sql("SELECT '[1,2,3]'::vector <-> '[1,2,3]'::vector") == "0"
         sql("CREATE TABLE smoke_persistence(id int); INSERT INTO smoke_persistence VALUES (42)")
@@ -68,7 +72,7 @@ def main():
                 "employees": "3", "companyTypes": "창업기업"}
         request("/api/auth/signup", urllib.parse.urlencode(form).encode())
         login = json.loads(request("/api/auth/login", urllib.parse.urlencode(form).encode()))
-        assert login["redirect"] == "/external_index.html"
+        assert login["redirect"] == "/chat"
         token = login["accessToken"]
         req = urllib.request.Request(base + "/api/rag/me", headers={"Authorization": "Bearer " + token})
         with client.open(req, timeout=5) as response:

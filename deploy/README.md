@@ -21,8 +21,8 @@ curl -fsS http://127.0.0.1:8080/api/rag/health
 ```
 
 - `http://127.0.0.1:8080/signup`에서 가입하고 `/login`에서 로그인한다.
-- 로그인 후 `/external_index.html`로 이동한다. 기본 API 주소는 같은 출처의 `/api/rag`다. 브라우저에 예전 API 주소가 저장되어 있으면 화면에서 전체 주소 `http://127.0.0.1:8080/api/rag`로 변경한다.
-- 네이버 `/upload-topic`은 기존 결정대로 비활성화 상태다. 콘솔의 해당 버튼은 아직 남아 있다.
+- 로그인 후 `/chat`으로 이동한다. 필수 화면은 `/signup`, `/login`, `/chat`, `/documents`이며 API는 같은 출처의 `/api/auth`, `/api/rag`를 사용한다. 기존 개발 콘솔은 `/external_index.html`에 남아 있다.
+- 사용자에게는 경영지원/사업공고로 표시한다. 네이버 `/upload-topic`은 기존 결정대로 비활성화 상태이며 새 화면에는 해당 수집 버튼을 제공하지 않는다.
 - DB와 백엔드는 호스트 포트를 공개하지 않는다. 기본 Nginx 바인딩도 `127.0.0.1:8080`이다.
 
 EC2 실행 시 로컬 컴퓨터의 다른 터미널에서 접속한다.
@@ -123,5 +123,9 @@ docker compose exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -
 종료 코드 0을 확인하고 사본을 EC2 밖에도 보관한다. 이 dump는 회원·청크·벡터·모델 설정·부칙을 함께 포함한다. 복원 검증은 별도 임시 DB에서 수행한다. 원본 PDF도 별도 보관한다. `docker compose down`은 named volume을 유지하고, `down -v`는 DB와 전처리 volume을 삭제하므로 운영에서 사용하지 않는다.
 
 ## 작업 기록
+
+필수 페이지와 UI 변경 반영 방법은 [프론트엔드 안내](../frontend/README.md)에 있다. 프론트 파일과 Nginx 마운트·경로가 변경되면 Nginx 컨테이너를 재생성한다.
+
+로컬에서 ARM64 이미지를 빌드해 EC2로 전송하는 방법은 [LOCAL_IMAGE_DEPLOY.md](LOCAL_IMAGE_DEPLOY.md)에 보류 항목으로 저장했다. 현재 배포 방식은 EC2 빌드로 유지한다.
 
 변경 이유·영향 파일·검증 결과·남은 작업은 [docs/WORK_LOG.md](../docs/WORK_LOG.md)에 날짜별로 기록한다. 팀의 과거 평가 결과와 검토 문서는 당시 FAISS 결과로 남기고, 이번 변경의 안내는 [PGVECTOR_MIGRATION.md](../rag-code-template_ext/law_pipeline/PGVECTOR_MIGRATION.md)를 따른다.
