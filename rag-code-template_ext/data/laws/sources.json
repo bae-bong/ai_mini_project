@@ -1,0 +1,139 @@
+{
+  "snapshot_date": "2026-10-23",
+  "chunk_size": 1000,
+  "chunk_overlap": 200,
+  "sources": [
+    {
+      "law_id": "labor_standards",
+      "law_name": "근로기준법",
+      "law_number": "21533",
+      "effective_date": "2026-10-08",
+      "file": "근로기준법(법률)(제21533호)(20261008).pdf",
+      "sha256": "4c9531f8b871c2e414b63c1a4da8afda1e6c5b953662e13c92d9092c3454f3f5",
+      "source_url": "https://www.law.go.kr/LSW/lsInfoP.do?lsiSeq=285279&efYd=20261008&ancYnChk=0",
+      "checked_at": "2026-10-23",
+      "law_level": "법률",
+      "category": "노무"
+    },
+    {
+      "law_id": "retirement",
+      "law_name": "근로자퇴직급여 보장법",
+      "law_number": "21475",
+      "effective_date": "2026-09-18",
+      "file": "근로자퇴직급여 보장법(법률)(제21475호)(20260918).pdf",
+      "sha256": "fecc26b09ba10c2400da6be843052a27932ca0ae2a4f59665be69f4f8e002759",
+      "source_url": "https://www.law.go.kr/LSW/lsInfoP.do?lsiSeq=284455&efYd=20260918&ancYnChk=0",
+      "checked_at": "2026-10-23",
+      "law_level": "법률",
+      "category": "노무"
+    },
+    {
+      "law_id": "equal_employment",
+      "law_name": "남녀고용평등과 일ㆍ가정 양립 지원에 관한 법률",
+      "law_number": "21476",
+      "effective_date": "2026-09-18",
+      "file": "남녀고용평등과 일ㆍ가정 양립 지원에 관한 법률(법률)(제21476호)(20260918).pdf",
+      "sha256": "df75bcefa934f64ef808ed3a91998161c84a8fe63d9b586aeda9ff569f53e34a",
+      "source_url": "https://www.law.go.kr/LSW/lsInfoP.do?lsiSeq=284457&efYd=20260918&ancYnChk=0",
+      "checked_at": "2026-10-23",
+      "law_level": "법률",
+      "category": "노무"
+    },
+    {
+      "law_id": "minimum_wage",
+      "law_name": "최저임금법",
+      "law_number": "17326",
+      "effective_date": "2020-05-26",
+      "file": "최저임금법(법률)(제17326호)(20200526).pdf",
+      "sha256": "cfca9d7f21446b1d70ce906b21eee9af0d1f52b4aade9bba109bf9df68d78d00",
+      "source_url": "https://www.law.go.kr/LSW/lsInfoP.do?lsiSeq=218303&efYd=20200526&ancYnChk=0",
+      "checked_at": "2026-10-23",
+      "law_level": "법률",
+      "category": "노무"
+    },
+    {
+      "law_id": "venture",
+      "law_name": "벤처기업육성에 관한 특별법",
+      "law_number": "21447",
+      "effective_date": "2026-07-01",
+      "file": "벤처기업육성에 관한 특별법(법률)(제21447호)(20260701).pdf",
+      "sha256": "5f1ab1e0c0c27d724c62044b29c4c1b901e19d8921b6f78eb292f1a2ae3c1f78",
+      "source_url": "https://www.law.go.kr/LSW//lsInfoP.do?ancYnChk=0&chrClsCd=010202&efYd=20260701&lsiSeq=284081&urlMode=lsInfoP",
+      "checked_at": "2026-10-23",
+      "law_level": "법률",
+      "category": "우대기업"
+    },
+    {
+      "law_id": "social_enterprise",
+      "law_name": "사회적기업 육성법",
+      "law_number": "21785",
+      "effective_date": "2026-06-09",
+      "file": "사회적기업 육성법(법률)(제21785호)(20260609).pdf",
+      "sha256": "3efe79c97432f149c43aa19391c17d948ae343060eca1bb7abf0cd1cb40c7997",
+      "source_url": "https://www.law.go.kr/LSW//lsInfoP.do?ancYnChk=0&chrClsCd=010202&efYd=20260609&lsiSeq=286815&urlMode=lsInfoP",
+      "checked_at": "2026-10-23",
+      "law_level": "법률",
+      "category": "우대기업"
+    },
+    {
+      "law_id": "small_business",
+      "law_name": "소상공인기본법",
+      "law_number": "21192",
+      "effective_date": "2026-06-03",
+      "file": "소상공인기본법(법률)(제21192호)(20260603).pdf",
+      "sha256": "a0199553f6ce889ad29977d1e5b2c9dcd83800ba0148c96c8d2ed6eff21819bb",
+      "source_url": "https://www.law.go.kr/LSW//lsInfoP.do?ancYnChk=0&chrClsCd=010202&efYd=20260603&lsiSeq=280155&urlMode=lsInfoP",
+      "checked_at": "2026-10-23",
+      "law_level": "법률",
+      "category": "우대기업"
+    },
+    {
+      "law_id": "women_enterprise",
+      "law_name": "여성기업지원에 관한 법률",
+      "law_number": "19825",
+      "effective_date": "2024-05-01",
+      "file": "여성기업지원에 관한 법률(법률)(제19825호)(20240501).pdf",
+      "sha256": "1bc7829e2fb5a20f8c6378e5419b25fea0dade44ac9e13626b5828e8f917f9d5",
+      "source_url": "https://www.law.go.kr/LSW//lsInfoP.do?ancYnChk=0&chrClsCd=010202&efYd=20240501&lsiSeq=255889&urlMode=lsInfoP",
+      "checked_at": "2026-10-23",
+      "law_level": "법률",
+      "category": "우대기업"
+    },
+    {
+      "law_id": "disabled_enterprise",
+      "law_name": "장애인기업활동 촉진법",
+      "law_number": "21195",
+      "effective_date": "2026-06-03",
+      "file": "장애인기업활동 촉진법(법률)(제21195호)(20260603).pdf",
+      "sha256": "47204218b4f79c3db267d879a91864978f52456f5e1b907f3229135e109a2706",
+      "source_url": "https://www.law.go.kr/LSW//lsInfoP.do?ancYnChk=0&chrClsCd=010202&efYd=20260603&lsiSeq=280145&urlMode=lsInfoP",
+      "checked_at": "2026-10-23",
+      "law_level": "법률",
+      "category": "우대기업"
+    },
+    {
+      "law_id": "sme",
+      "law_name": "중소기업기본법",
+      "law_number": "21290",
+      "effective_date": "2026-07-01",
+      "file": "중소기업기본법(법률)(제21290호)(20260701).pdf",
+      "sha256": "83db01886402896b6084c84dd7c21c0dd7958f1a756e9af73d423ba386544c51",
+      "source_url": "https://www.law.go.kr/LSW//lsInfoP.do?ancYnChk=0&chrClsCd=010202&efYd=20260701&lsiSeq=281989&urlMode=lsInfoP",
+      "checked_at": "2026-10-23",
+      "law_level": "법률",
+      "category": "우대기업"
+    },
+    {
+      "law_id": "startup",
+      "law_name": "중소기업창업 지원법",
+      "law_number": "21293",
+      "effective_date": "2026-07-01",
+      "file": "중소기업창업 지원법(법률)(제21293호)(20260701).pdf",
+      "sha256": "92149f56526677bd3cba68eb5c5e5e50a929d57ed5c9a8e2f1ea8891d403a75a",
+      "source_url": "https://www.law.go.kr/LSW//lsInfoP.do?ancYnChk=0&chrClsCd=010202&efYd=20260701&lsiSeq=281995&urlMode=lsInfoP",
+      "checked_at": "2026-10-23",
+      "law_level": "법률",
+      "category": "우대기업"
+    }
+  ]
+}
