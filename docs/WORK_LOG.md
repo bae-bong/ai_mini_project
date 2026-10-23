@@ -78,3 +78,13 @@
 - EC2 중지 후 재시작, 서비스만 중지·재개, 자주 발생한 GitHub 인증·502·404·터널 포트 오류를 기록했다. Mac과 EC2에서 실행할 명령을 명시했다.
 - 같은 문서에 Docker 공식 저장소를 통한 최초 설치와 기존 DB 갱신·이관·백업 절차를 통합했다. 루트 README는 기존 프로젝트 개요와 배포 문서 링크로 유지했다. 현재 정적 프론트 경로 설명도 바로잡았다.
 - 문서의 셸 코드 블록 구문과 상대 파일 링크를 검사했다. 문서 수정만 수행했으며 EC2 접속·서비스 변경·비밀값 조회·커밋·push는 하지 않았다.
+
+## 2026-10-23 — DuckDNS 도메인 공개 HTTPS 설정 준비
+
+- 사용자 도메인 `skala-ai.duckdns.org`와 기존 EC2 퍼블릭 DNS를 조회해 둘 다 `32.236.191.133`을 가리키는 것을 확인했다. DNS 레코드를 변경하거나 DuckDNS 토큰을 사용하지 않았다.
+- `compose.public.yaml`을 추가했다. 기본 SSH용 Compose는 유지하고 공개 모드에서 Nginx 80/443과 인증서·ACME 디렉터리만 추가한다. DB·auth·rag 포트는 비공개다.
+- 기존 Nginx 앱 경로를 `app.conf`로 분리했다. 인증서 발급 전 HTTP 설정은 ACME 파일만 제공하고 일반 요청은 503으로 제한한다. 최종 설정은 HTTPS에서 앱을 제공하고 HTTP는 HTTPS로 이동시킨다. HTTPS 인증 쿠키에 Secure를 추가한다.
+- `deploy/README.md`에 보안 그룹·DNS 확인·Certbot 발급·HTTPS 전환·자동 갱신 hook·공개 모드 재배포·SSH 모드 복귀 절차를 기록했다.
+- `python3 deploy/test_https.py` 통과: 임시 자체서명 인증서로 ACME bootstrap, HTTP 308, HTTPS 인증서 검증·네 페이지, Secure 쿠키, Nginx 재로드를 확인했다. 실제 인증서는 발급하지 않았다.
+- `python3 deploy/smoke_test.py`도 통과해 공통 Nginx 경로 분리 후 기존 비공개 Compose·인증·RAG와 16개 회귀 테스트가 유지됨을 확인했다.
+- 공개 Compose 구성·문서 셸 문법·링크·Python 문법·diff 공백 검사 통과. 실제 EC2·보안 그룹·인증서 발급·갱신 timer는 사용자가 문서 절차로 적용하고 확인해야 한다. 커밋·push는 하지 않았다.
