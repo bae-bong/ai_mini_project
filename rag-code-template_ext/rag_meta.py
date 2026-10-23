@@ -4,6 +4,7 @@
 - 공고: 신청기간 파싱, 마감 여부 계산
 """
 import re
+import unicodedata
 from datetime import date, datetime, timezone, timedelta
 from pypdf import PdfReader
 
@@ -18,6 +19,8 @@ FILENAME_RE = re.compile(r"^(?P<name>.+?)\((?P<level>법률|대통령령|총리�
 
 
 def law_info_from_filename(filename: str) -> dict:
+    # macOS는 한글 파일명을 NFD(자모 분리)로 넘긴다 → NFC로 합쳐야 정규식·비교가 맞는다
+    filename = unicodedata.normalize("NFC", filename)
     base = filename.rsplit("/", 1)[-1].removesuffix(".pdf")
     m = FILENAME_RE.match(base)
     if not m:
@@ -86,6 +89,7 @@ def split_law_articles(pages: list[tuple[int, str]]) -> list[dict]:
 
 def build_law_chunks(path: str, filename: str, category: str, max_chars: int = 1000, overlap: int = 150) -> list[dict]:
     """조 단위 청크 + 메타데이터. 반환: [{"page_content":..., "metadata":{...}}]"""
+    filename = unicodedata.normalize("NFC", filename)
     info = law_info_from_filename(filename)
     pages = load_pdf_pages(path, info["law_name"])
     arts = split_law_articles(pages)
