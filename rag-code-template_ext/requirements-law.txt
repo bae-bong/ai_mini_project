@@ -1,0 +1,6 @@
+# Python 3.11+; this module does not need the voice/DB/server dependencies.
+pypdf>=4,<7
+langchain-community==0.4.1
+langchain-openai==1.1.7
+faiss-cpu>=1.7,<2
+python-dotenv>=1,<2
