@@ -12,6 +12,8 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
 from pypdf import PdfReader
 from langchain_core.messages import HumanMessage
+from fastapi import Form
+from rag_meta import build_law_chunks
 
 # 패키지는 저자 업데이트에 맞춰 해당 버전으로 맞추는 것을 권장
 # 직접 저자의 site-packages/패키지명/을 직접 수정하는 것은 추천하지 않음
@@ -206,32 +208,30 @@ async def upload_topic(topic: str = Query(..., description="검색할 주제")):
         raise HTTPException(status_code=500, detail=str(e))
 
 # ✅ PDF 업로드 및 벡터화
-@app.post("/upload-paper", summary="PDF 업로드 및 벡터화", tags=["PDF 처리"]) 
-async def upload_pdf(file: UploadFile = File(...)):
+@app.post("/upload-paper", summary="법령 PDF 업로드 및 벡터화 (조 단위)", tags=["PDF 처리"])
+async def upload_pdf(
+    file: UploadFile = File(...),
+    category: str = Form("노무", description="노무 | 우대기업"),
+):
     if not file.filename.endswith(".pdf"):
         raise HTTPException(status_code=400, detail="PDF 파일만 허용됩니다.")
-
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
             tmp.write(await file.read())
             tmp_path = tmp.name
-
         try:
-            paper_text = load_paper(tmp_path)
+            chunks = build_law_chunks(tmp_path, file.filename, category)
         finally:
             os.unlink(tmp_path)
-        if not paper_text.strip():
+
+        if not chunks or not any(c["page_content"].strip() for c in chunks):
             raise HTTPException(status_code=422, detail="PDF에서 텍스트를 추출하지 못했습니다. 스캔 PDF라면 OCR이 필요합니다.")
-        # [Q01] PDF 청크 설계
-        # [설계 판단] PDF 전체 텍스트를 임베딩하기 전에 검색 가능한 작은 단위로 나누되, 청크 경계에서 정보가 끊어지지 않도록 일부 중첩을 둡니다. 이 서버의 PDF 청크 크기와 중첩 크기를 설정하세요.
-        # [TODO Q01] 아래 ... 부분을 적절한 코드로 교체하세요.
-        splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
-        docs = splitter.create_documents([paper_text], metadatas=[{"source": file.filename}])
+
+        # [Q01 개선] 고정 500자 → 조 단위 청킹(최대 1,000자, 중첩 150) + '법령명 조문(제목)' 머리글
+        docs = [Document(page_content=c["page_content"], metadata=c["metadata"]) for c in chunks]
 
         global VECTORSTORE_PDF
-        # [Q02] PDF 임베딩과 벡터 저장소 연결
-        # [설계 판단] 분할한 PDF 문서(docs)를 OpenAI 임베딩 모델로 벡터화하여 FAISS 검색 저장소로 만드세요.
-        # [TODO Q02] 아래 ... 부분을 적절한 코드로 교체하세요.
+        # [Q02] 적재·검색 임베딩 모델 일치 (OpenAIEmbeddings)
         new_store = FAISS.from_documents(docs, OpenAIEmbeddings())
         if VECTORSTORE_PDF is None:
             VECTORSTORE_PDF = new_store
@@ -242,11 +242,12 @@ async def upload_pdf(file: UploadFile = File(...)):
         os.makedirs("faiss_db/pdf", exist_ok=True)
         VECTORSTORE_PDF.save_local("faiss_db/pdf")
 
-        return JSONResponse(content={
-            "message": f"{len(docs)}개의 PDF 청크 벡터화 및 저장 완료",
-            "extracted_characters": len(paper_text),
-            "preview": paper_text[:300]
-        })
+        return {
+            "message": f"{len(docs)}개 조문 청크 적재 완료",
+            "law_name": docs[0].metadata["law_name"],
+            "articles": sum(1 for d in docs if d.metadata["article_no"]),
+            "sample_metadata": docs[min(5, len(docs) - 1)].metadata,
+        }
     except HTTPException:
         raise
     except Exception as e:
