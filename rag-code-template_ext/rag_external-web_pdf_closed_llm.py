@@ -13,12 +13,13 @@ from langchain_core.documents import Document
 from pypdf import PdfReader
 from langchain_core.messages import HumanMessage
 from fastapi import Form
-from rag_meta import build_law_chunks
+from rag_meta import build_law_chunks, build_notice_chunks
 from rag_answer import (search_law, law_sources, judge_needs_review, build_law_context,
                         build_law_prompt, persona_applied, NOT_FOUND, REVIEW_NOTICE,
                         retrieved_list, PROMPT_VERSION,
                         QUERY_REWRITE, search_law_pipeline, cited_sources,
-                        USE_SYNONYMS, expand_query)
+                        USE_SYNONYMS, expand_query,
+                        rank_notices_for_persona, build_notice_context, build_notice_prompt, notice_sources)
 
 # 패키지는 저자 업데이트에 맞춰 해당 버전으로 맞추는 것을 권장
 # 직접 저자의 site-packages/패키지명/을 직접 수정하는 것은 추천하지 않음
@@ -240,6 +241,58 @@ async def upload_pdf(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/upload-notice", summary="지원사업 공고(meta JSON + 첨부 PDF) 적재·덮어쓰기", tags=["공고"])
+async def upload_notice(
+    meta: str = Form(..., description="tools/make_notice_meta.py 가 만든 공고 meta JSON 문자열"),
+    file: Optional[UploadFile] = File(None, description="공고 첨부 PDF (선택)"),
+    current_user: dict = Depends(get_current_user),
+):
+    """같은 notice_id + 파일명으로 다시 올리면 해당 청크만 교체된다.
+    - 개요(meta) 청크: source_file = '{notice_id}/_meta'
+    - 첨부 PDF 청크: source_file = '{notice_id}/{파일명}'"""
+    try:
+        meta_obj = json.loads(meta)
+        if not isinstance(meta_obj, dict):
+            raise ValueError
+    except ValueError:
+        raise HTTPException(status_code=400, detail="meta는 JSON 객체 문자열이어야 합니다.")
+    if file is not None and file.filename and not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="첨부는 PDF만 허용됩니다. (HWP는 tools/hwp_to_pdf.py로 변환)")
+
+    tmp_path = None
+    try:
+        if file is not None and file.filename:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+                tmp.write(await file.read())
+                tmp_path = tmp.name
+        try:
+            overview, body = build_notice_chunks(meta_obj, tmp_path, file.filename if tmp_path else None)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        finally:
+            if tmp_path:
+                os.unlink(tmp_path)
+
+        to_docs = lambda cs: [Document(page_content=c["page_content"], metadata=c["metadata"]) for c in cs]
+        VECTORSTORE_WEB.add_documents(to_docs(overview), source_file=overview[0]["metadata"]["source_file"])
+        body_note = None
+        if body:
+            VECTORSTORE_WEB.add_documents(to_docs(body), source_file=body[0]["metadata"]["source_file"])
+        elif tmp_path:
+            body_note = "첨부 PDF에서 텍스트를 추출하지 못해 개요만 적재했습니다 (이미지 PDF면 OCR 필요)."
+        m = overview[0]["metadata"]
+        return {"message": f"공고 적재 완료: 개요 1개 + 본문 {len(body)}개 청크",
+                "notice_id": m["notice_id"], "title": m["title"],
+                "apply_start": m["apply_start"], "apply_end": m["apply_end"],
+                "company_types": m["company_types"],
+                "replaced_keys": [overview[0]["metadata"]["source_file"]] + ([body[0]["metadata"]["source_file"]] if body else []),
+                "note": body_note}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # 질의 요청/응답 모델 정의
 # ✅ 질의 요청 모델
 class RAGRequest(BaseModel):
@@ -413,77 +466,36 @@ async def rag_query(
 
         # -------------------- WEB 검색 --------------------
         elif source == "web":
-            q = rag_request.prompt or ""
-            # 한글 포함 여부 간단 판별
-            has_korean = any('\uac00' <= ch <= '\ud7a3' for ch in q)
-            merged = []
+            # 공고 검색: pgvector + BM25 hybrid (법령과 같은 방식), 페르소나 기업유형 일치 공고 우선
+            persona = current_user.get("persona")
+            rewritten = expand_query(rag_request.prompt) if USE_SYNONYMS else None
+            if rewritten == rag_request.prompt:
+                rewritten = None
+            ranked = vectorstore.retrieve(rewritten or rag_request.prompt, top_k, hybrid=True)["ranked"]
+            docs_scores = rank_notices_for_persona(ranked, persona)
+            run_config = {"search": "hybrid", "collection": "web", "top_k": top_k,
+                          "temperature": LLM_TEMPERATURE, "seed": LLM_SEED,
+                          "synonyms": USE_SYNONYMS, "rewritten": rewritten}
+            retrieved = [{"rank": i, "notice_id": (d.metadata or {}).get("notice_id"),
+                          "title": (d.metadata or {}).get("title"), "page": (d.metadata or {}).get("page"),
+                          "score": round(float(sc), 4)} for i, (d, sc) in enumerate(docs_scores, start=1)]
 
-            def limited_context(docs, limit_chars=4000):
-                buf, total = [], 0
-                for d in docs:
-                    pc = getattr(d, "page_content", "") or ""
-                    if not pc.strip():
-                        continue
-                    if total + len(pc) > limit_chars:
-                        break
-                    buf.append(pc); total += len(pc)
-                return "\n\n".join(buf)
-
-            # 1차: 원문 질의
-            docs1 = vectorstore.similarity_search(q, k=top_k)
-            merged.extend(docs1)
-
-            # 2차: 한국어 → 영어 번역 질의(실 서비스에서는 번역 API 사용 권장)
-            q_en = q
-            try:
-                if has_korean:
-                    q_en = q  # TODO: 실제 번역 적용
-                    docs2 = vectorstore.similarity_search(q_en, k=top_k)
-                    merged.extend(docs2)
-            except Exception:
-                pass  # 번역/검색 실패 시 무시
-
-            # 중복 제거(간단히 page_content 기준)
-            seen, merged_uniq = set(), []
-            for d in merged:
-                key = getattr(d, "page_content", "")
-                if key and key not in seen:
-                    seen.add(key); merged_uniq.append(d)
-
-            if not merged_uniq:
-                return AnswerResponse(prompt=rag_request.prompt,
-                                    response="웹 검색 기반 지식베이스에서 충분한 결과를 찾지 못했습니다. 키워드를 달리하여 다시 시도해 주십시오.")
-
-            context = limited_context(merged_uniq, limit_chars=4000)
+            context = build_notice_context(docs_scores, persona)
             if not context.strip():
-                return AnswerResponse(prompt=rag_request.prompt,
-                                    response="웹 검색 기반 지식베이스에서 충분한 결과를 찾지 못했습니다. 키워드를 달리하여 다시 시도해 주십시오.")
+                return AnswerResponse(prompt=rag_request.prompt, response=NOT_FOUND,
+                                      persona_applied=persona_applied(persona), sources=[],
+                                      retrieved=retrieved, config=run_config)
 
-            # 인용 유도, N/A 강제는 사용하지 않음
-            full_prompt = (
-                "아래 컨텍스트에서만 답변을 작성하시오. 컨텍스트에 없는 내용은 추측하지 마시오. "
-                "가능하면 문장 끝에 간단한 출처 표기를 괄호로 덧붙이시오(예: (출처 1), (출처 2)).\n"
-                f"{context}\n\n"
-                f"질문: {rag_request.prompt}\n\n"
-                "### ANSWER_START\n"
-                "<정답(간결한 한국어, 필요 시 간단한 출처 표기)>\n"
-                "### ANSWER_END"
-            )
-
-            if llm_type == "huggingface": # Embedding 시, bge_embedder 사용한 경우에 선택 권고
-                out = text_generator(full_prompt, max_new_tokens=200, do_sample=False, return_full_text=False) #  temperature=0.0 제거
-                raw = (out[0].get("generated_text") or "").strip()
-                answer = extract_by_marker(raw)
-                if not answer and 0 < len(raw) <= 500 and '###' not in raw:
-                    answer = raw
-            else:
-                raw = llm.invoke([HumanMessage(content=full_prompt)]).content.strip()
-                answer = extract_by_marker(raw) or raw
-
-            final = (answer or "").strip()
-            if final == "":
-                final = "웹 검색 기반 지식베이스에서 충분한 결과를 찾지 못했습니다. 키워드를 달리하여 다시 시도해 주십시오."
-            return AnswerResponse(prompt=rag_request.prompt, response=final)
+            raw = llm.invoke([HumanMessage(content=build_notice_prompt(rag_request.prompt, context, persona))]).content
+            final = (raw.strip() if isinstance(raw, str) else str(raw).strip())
+            if not final or NOT_FOUND in final:
+                return AnswerResponse(prompt=rag_request.prompt, response=NOT_FOUND,
+                                      persona_applied=persona_applied(persona), sources=[],
+                                      retrieved=retrieved, config=run_config)
+            return AnswerResponse(prompt=rag_request.prompt, response=final,
+                                  persona_applied=persona_applied(persona),
+                                  sources=notice_sources(docs_scores, final),
+                                  retrieved=retrieved, config=run_config)
 
         # -------------------- 기타 --------------------
         else:

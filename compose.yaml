@@ -77,6 +77,8 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:?Set OPENAI_API_KEY in .env}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-ada-002}
       EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-}
+      # nginx가 /api/rag/ 를 떼고 넘기므로 Swagger가 /api/rag/openapi.json 을 찾게 한다
+      UVICORN_ROOT_PATH: /api/rag
     volumes:
       - ./upload-paper:/upload-paper:ro
       - law_processed:/app/data/laws/processed

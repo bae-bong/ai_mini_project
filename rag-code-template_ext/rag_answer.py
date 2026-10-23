@@ -251,3 +251,72 @@ def persona_applied(persona: dict | None) -> dict | None:
         "company_types": persona.get("company_types") or [],
         "note": persona_note(persona),
     }
+
+
+# ---------------------------------------------------------------------------
+# 공고(web) 검색·답변
+# ---------------------------------------------------------------------------
+def persona_matches(meta: dict, persona: dict | None) -> list[str]:
+    """공고 대상 기업유형 ∩ 사용자 기업유형"""
+    mine = set((persona or {}).get("company_types") or [])
+    return [t for t in (meta.get("company_types") or []) if t in mine]
+
+
+def rank_notices_for_persona(docs_scores, persona: dict | None):
+    """검색 순위는 유지하되, 사용자 기업유형과 맞는 공고 청크를 앞으로 (안정 정렬)."""
+    if not (persona or {}).get("company_types"):
+        return docs_scores
+    return sorted(docs_scores, key=lambda ds: 0 if persona_matches(ds[0].metadata or {}, persona) else 1)
+
+
+def build_notice_context(docs_scores, persona: dict | None, max_chars: int = 12000) -> str:
+    from rag_meta import notice_status
+    buf, total = [], 0
+    for doc, _ in docs_scores:
+        m = doc.metadata or {}
+        match = persona_matches(m, persona)
+        head = (f"[공고: {m.get('title')} | 접수상태: {notice_status(m.get('apply_end'))} | "
+                f"신청기간: {m.get('period_raw') or '확인 필요'} | 대상유형: {', '.join(m.get('company_types') or []) or '미분류'}"
+                + (f" | 사용자 유형 일치: {', '.join(match)}" if match else "") + "]")
+        block = f"{head}\n{doc.page_content}"
+        if total + len(block) > max_chars:
+            break
+        buf.append(block)
+        total += len(block)
+    return "\n\n".join(buf)
+
+
+def build_notice_prompt(question: str, context: str, persona: dict | None) -> str:
+    return (
+        "당신은 중소기업 경영지원 담당자에게 정부 지원사업 공고를 안내하는 어시스턴트입니다.\n"
+        "규칙:\n"
+        "1. 아래 [공고]에 있는 내용만으로 한국어로 답한다. 지원금액·기간·자격을 만들지 않는다.\n"
+        "2. 공고를 언급할 때마다 문장 끝에 (공고명) 형식으로 출처를 붙인다.\n"
+        "3. 접수상태가 '마감'인 공고는 마감되었다고 분명히 밝힌다. '기간 확인 필요'면 공고 원문 확인을 권한다.\n"
+        "4. '사용자 유형 일치'가 표시된 공고를 먼저 안내하되, 자격 판단은 공고 원문 확인이 필요하다고 덧붙인다.\n"
+        f"5. 질문과 관련된 공고가 없으면 '{NOT_FOUND}'이라고만 답한다.\n\n"
+        f"{persona_note(persona)}\n\n"
+        f"[공고]\n{context}\n\n"
+        f"질문: {question}\n\n"
+        "답변:"
+    )
+
+
+def notice_sources(docs_scores, answer: str | None = None, fallback: int = 3) -> list[dict]:
+    """공고 단위로 묶은 출처. answer가 있으면 답변에 공고명이 나온 것만 남긴다."""
+    from rag_meta import notice_status
+    seen, out = set(), []
+    for doc, score in docs_scores:
+        m = doc.metadata or {}
+        nid = m.get("notice_id")
+        if not nid or nid in seen:
+            continue
+        seen.add(nid)
+        out.append({"type": "notice", "notice_id": nid, "title": m.get("title"), "agency": m.get("agency"),
+                    "period": m.get("period_raw"), "apply_end": m.get("apply_end"),
+                    "status": notice_status(m.get("apply_end")), "company_types": m.get("company_types") or [],
+                    "url": m.get("url"), "page": m.get("page"), "score": round(float(score), 4)})
+    if answer is None:
+        return out
+    cited = [s for s in out if s["title"] and s["title"][:15] in answer]
+    return cited or out[:fallback]
