@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def main():
-    parser = argparse.ArgumentParser(description="법령 PDF 전처리·FAISS 적재·근거 검색")
+    parser = argparse.ArgumentParser(description="법령 PDF 전처리·pgvector 적재·근거 검색")
     parser.add_argument("--env-file", type=Path, default=ROOT / ".env")
     sub = parser.add_subparsers(dest="command", required=True)
     p = sub.add_parser("preprocess")
@@ -21,13 +21,11 @@ def main():
     p.add_argument("--as-of")
     b = sub.add_parser("build")
     b.add_argument("--processed", type=Path, default=ROOT / "data/laws/processed")
-    b.add_argument("--index", type=Path, default=ROOT / "faiss_db/pdf")
     b.add_argument("--model", default="text-embedding-ada-002")
     b.add_argument("--dimensions", type=int)
     b.add_argument("--replace", action="store_true")
     s = sub.add_parser("search")
     s.add_argument("question")
-    s.add_argument("--index", type=Path, default=ROOT / "faiss_db/pdf")
     s.add_argument("--k", type=int, default=5)
     s.add_argument("--mode", choices=["hybrid", "dense"], default="hybrid")
     s.add_argument("--output", type=Path)
@@ -41,11 +39,11 @@ def main():
             print(json.dumps({k: v for k, v in report.items() if k != "sources"}, ensure_ascii=False, indent=2))
         elif args.command == "build":
             from .index import build_index
-            result = build_index(args.processed, args.index, args.model, args.dimensions, args.replace)
+            result = build_index(args.processed, args.model, args.dimensions, args.replace)
             print(json.dumps({k: result[k] for k in ["as_of", "vectors", "vector_dimension", "embedding_model"]}, indent=2))
         elif args.command == "search":
             from .index import search
-            result = search(args.index, args.question, args.k, mode=args.mode)
+            result = search(args.question, args.k, mode=args.mode)
             text = json.dumps(result, ensure_ascii=False, indent=2)
             if args.output:
                 args.output.parent.mkdir(parents=True, exist_ok=True)

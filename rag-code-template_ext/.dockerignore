@@ -1,0 +1,11 @@
+.git
+.venv
+venv
+__pycache__
+*.pyc
+**/.env
+**/*.env
+**/*.pem
+**/*.key
+faiss_db
+uploads

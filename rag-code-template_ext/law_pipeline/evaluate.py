@@ -27,16 +27,16 @@ CASES = [
 ]
 
 
-def evaluate(index: Path, output: Path, mode: str = "hybrid"):
-    store = load_index(index)
+def evaluate(output: Path, mode: str = "hybrid"):
+    store = load_index()
     rows = []
     for question, law, article in CASES:
-        result = search(index, question, 5, store=store, mode=mode)
+        result = search(question, 5, store=store, mode=mode)
         rank = next((i + 1 for i, hit in enumerate(result["hits"])
                      if hit["metadata"]["law_id"] == law and hit["metadata"]["article"] == article), None)
         rows.append({"question": question, "expected_law": law, "expected_article": article, "rank": rank, "result": result})
     passed = sum(r["rank"] is not None for r in rows)
-    model = json.loads((index / "manifest.json").read_text())["embedding_model"]
+    model = store.info()["embedding_model"]
     report = {"metric": "expected_article_hit_at_5", "embedding_model": model, "retrieval_mode": mode,
               "passed": passed, "total": len(rows), "rate": passed / len(rows),
               "note": "기대 조항 포함 여부만 평가. 답변 정확성·법적 적용 판단·범위 밖 거절 성능을 의미하지 않음.", "results": rows}
@@ -50,8 +50,7 @@ if __name__ == "__main__":
     from .__main__ import ROOT
     load_dotenv(ROOT / ".env", override=False)
     parser = argparse.ArgumentParser()
-    parser.add_argument("--index", type=Path, default=ROOT / "faiss_db/pdf")
     parser.add_argument("--output", type=Path, default=ROOT / "data/laws/processed/search_evaluation.json")
     parser.add_argument("--mode", choices=["hybrid", "dense"], default="hybrid")
     args = parser.parse_args()
-    print(json.dumps(evaluate(args.index, args.output, args.mode), ensure_ascii=False))
+    print(json.dumps(evaluate(args.output, args.mode), ensure_ascii=False))

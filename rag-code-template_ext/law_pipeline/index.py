@@ -1,16 +1,14 @@
-"""LangChain FAISS format, with reproducible model metadata and supplements."""
+"""pgvector law ingestion and hybrid retrieval, preserving the team metadata contract."""
 from __future__ import annotations
 
 import json
 import os
-import shutil
-import tempfile
 import math
 import re
 from collections import Counter
 from pathlib import Path
 
-from .extract import digest, read_jsonl, write_jsonl
+from .extract import digest, read_jsonl
 from .schema import ingestion_time, validate_law_metadata, law_sources
 
 DEFAULT_MODEL = "text-embedding-ada-002"  # Existing template's OpenAIEmbeddings default.
@@ -26,13 +24,14 @@ def embeddings(model: str, dimensions: int | None = None):
     return OpenAIEmbeddings(**kwargs)
 
 
-def build_index(processed: Path, destination: Path, model: str = DEFAULT_MODEL,
+def build_index(processed: Path, model: str = DEFAULT_MODEL,
                 dimensions: int | None = None, replace: bool = False, embedding_client=None) -> dict:
-    from langchain_community.vectorstores import FAISS
     from langchain_core.documents import Document
+    from core.vector_store import PgVectorStore
 
-    if destination.exists() and any(destination.iterdir()) and not replace:
-        raise ValueError("기존 인덱스가 있습니다. 내용을 확인한 뒤 --replace로 재생성하세요.")
+    existing = PgVectorStore("pdf").info()
+    if existing and not replace:
+        raise ValueError("기존 컬렉션이 있습니다. 백업 후 --replace를 사용하세요.")
     chunks = read_jsonl(processed / "chunks.jsonl")
     report = json.loads((processed / "report.json").read_text())
     if not chunks or any(c["metadata"]["status"] != "current" for c in chunks):
@@ -56,52 +55,26 @@ def build_index(processed: Path, destination: Path, model: str = DEFAULT_MODEL,
         ordinals[key] = expected + 1
     client = embedding_client or embeddings(model, dimensions)
     docs = [Document(page_content=c["page_content"], metadata=c["metadata"]) for c in chunks]
-    vectorstore = FAISS.from_documents(docs, client, ids=[c["metadata"]["chunk_id"] for c in chunks])
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    # Finish all files in a sibling directory before replacing an existing index.
-    temp = Path(tempfile.mkdtemp(prefix=".law-index-", dir=destination.parent))
-    backup = destination.with_name(destination.name + ".previous")
-    try:
-        vectorstore.save_local(str(temp))
-        shutil.copy2(processed / "supplements.jsonl", temp / "supplements.jsonl")
-        write_jsonl(temp / "chunks.jsonl", chunks)
-        meta = {"format_version": 1, "metadata_contract": "law-2026-10-23", "ingested_at": ingested_at, "embedding_model": model, "requested_dimensions": dimensions,
-                "vector_dimension": int(vectorstore.index.d), "vectors": int(vectorstore.index.ntotal),
-                "as_of": report["as_of"], "sources": report["sources"],
-                "chunk_size": report["chunk_size"], "chunk_overlap": report["chunk_overlap"],
-                "chunks_sha256": digest((processed / "chunks.jsonl").read_bytes()),
-                "files": {name: digest((temp / name).read_bytes()) for name in
-                          ["index.faiss", "index.pkl", "supplements.jsonl", "chunks.jsonl"]}}
-        (temp / "manifest.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2))
-        if destination.exists():
-            if backup.exists():
-                raise ValueError(f"이전 백업이 이미 있습니다: {backup}; 먼저 별도 보관하세요.")
-            destination.rename(backup)
-        try:
-            temp.rename(destination)
-        except Exception:
-            if backup.exists() and not destination.exists():
-                backup.rename(destination)
-            raise
-        return meta
-    finally:
-        if temp.exists():
-            shutil.rmtree(temp)
+    vectors = client.embed_documents([d.page_content for d in docs])
+    meta = {"format_version": 2, "managed_by": "law_pipeline",
+            "metadata_contract": "law-2026-10-23", "ingested_at": ingested_at,
+            "as_of": report["as_of"], "sources": report["sources"],
+            "chunk_size": report["chunk_size"], "chunk_overlap": report["chunk_overlap"],
+            "chunks_sha256": digest((processed / "chunks.jsonl").read_bytes())}
+    store = PgVectorStore("pdf", model=model, dimensions=dimensions, embedding_client=client)
+    return store.write_vectors(docs, vectors, mode="replace" if replace else "create",
+                               manifest=meta, supplements=read_jsonl(processed / "supplements.jsonl"))
 
 
-def load_index(directory: Path, embedding_client=None):
-    """Only load indexes produced locally by this project; pickle is not an interchange format."""
-    from langchain_community.vectorstores import FAISS
-    meta = json.loads((directory / "manifest.json").read_text())
-    for name in meta["files"]:
-        if digest((directory / name).read_bytes()) != meta["files"][name]:
-            raise ValueError(f"인덱스 파일 해시 불일치: {name}")
-    client = embedding_client or embeddings(meta["embedding_model"], meta["requested_dimensions"])
-    # Hashes detect accidental mixing, NOT a malicious pickle and forged manifest.
-    store = FAISS.load_local(str(directory), client, allow_dangerous_deserialization=True)
-    if store.index.d != meta["vector_dimension"] or store.index.ntotal != meta["vectors"]:
-        raise ValueError("인덱스 크기가 manifest와 다릅니다.")
-    return store
+def load_index(embedding_client=None):
+    from core.vector_store import PgVectorStore
+    store = PgVectorStore("pdf", embedding_client=embedding_client)
+    info = store.info()
+    if not info:
+        raise ValueError("법령 컬렉션이 없습니다. law_pipeline build를 먼저 실행하세요.")
+    return PgVectorStore("pdf", model=info["embedding_model"],
+                         dimensions=info["manifest"].get("requested_dimensions"),
+                         embedding_client=embedding_client)
 
 
 def lexical_scores(texts: list[str], question: str) -> list[float]:
@@ -133,34 +106,29 @@ def lexical_scores(texts: list[str], question: str) -> list[float]:
     return scores
 
 
-def search(directory: Path, question: str, k: int = 5, *, store=None, mode: str = "hybrid") -> dict:
-    if not question.strip() or not 1 <= k <= 20:
-        raise ValueError("질문은 비어 있을 수 없고 k는 1~20이어야 합니다.")
+def rank_hybrid(ranked, question):
+    lexical = lexical_scores([doc.page_content for doc, _ in ranked], question)
+    lexical_order = sorted(range(len(ranked)), key=lambda i: (-lexical[i], i))
+    lexical_ranks = {i: pos + 1 for pos, i in enumerate(lexical_order) if lexical[i] > 0}
+    fusion = {doc.metadata["chunk_id"]: 1 / (60 + i + 1) +
+              (1 / (60 + lexical_ranks[i]) if i in lexical_ranks else 0)
+              for i, (doc, _) in enumerate(ranked)}
+    return sorted(ranked, key=lambda pair: -fusion[pair[0].metadata["chunk_id"]]), fusion
+
+
+def search(question: str, k: int = 5, *, store=None, mode: str = "hybrid") -> dict:
     if mode not in {"hybrid", "dense"}:
         raise ValueError("mode는 hybrid 또는 dense여야 합니다.")
-    store = store if store is not None else load_index(directory)
-    # These statutes are a small corpus. Searching all vectors also provides
-    # honest L2 distances for lexical candidates, rather than inventing scores.
-    ranked = store.similarity_search_with_score(question, k=int(store.index.ntotal) if mode == "hybrid" else k)
-    fusion = {}
-    if mode == "hybrid":
-        lexical = lexical_scores([doc.page_content for doc, _ in ranked], question)
-        lexical_order = sorted(range(len(ranked)), key=lambda i: (-lexical[i], i))
-        lexical_ranks = {i: pos + 1 for pos, i in enumerate(lexical_order) if lexical[i] > 0}
-        # Reciprocal rank fusion uses ranks, not incomparable BM25/L2 magnitudes.
-        fusion = {doc.metadata["chunk_id"]: 1 / (60 + i + 1) +
-                  (1 / (60 + lexical_ranks[i]) if i in lexical_ranks else 0)
-                  for i, (doc, _) in enumerate(ranked)}
-        ranked.sort(key=lambda pair: -fusion[pair[0].metadata["chunk_id"]])
-    hits = ranked[:k]
-    law_ids = {d.metadata["law_id"] for d, _ in hits}
-    # Addenda can qualify otherwise-current text, e.g. a temporarily lower employee limit.
-    # Return them separately, without pretending they were similarity-ranked hits.
-    supplements = [r for r in read_jsonl(directory / "supplements.jsonl") if r["law_id"] in law_ids]
-    meta = json.loads((directory / "manifest.json").read_text())
+    store = store if store is not None else load_index()
+    result = store.retrieve(question, k, hybrid=mode == "hybrid")
+    hits = result["ranked"]
+    law_ids = {d.metadata.get("law_id") for d, _ in hits}
+    supplements = [r for r in result["supplements"] if r["law_id"] in law_ids]
+    meta = result["manifest"]
+    fusion = result.get("fusion", {})
     hit_rows = [{"text": d.page_content, "metadata": d.metadata, "score": float(s),
                  "retrieval_score": fusion.get(d.metadata["chunk_id"])} for d, s in hits]
-    return {"question": question, "as_of": meta["as_of"], "retrieval_mode": mode,
+    return {"question": question, "as_of": meta.get("as_of"), "retrieval_mode": mode,
             "score_type": "squared_L2_lower_is_closer", "ordering": "rrf_higher_first" if mode == "hybrid" else "L2_lower_first",
             "hits": hit_rows, "sources": law_sources(hit_rows),
             "supplementary_context": [{"text": r["text"], "metadata": {k: v for k, v in r.items()

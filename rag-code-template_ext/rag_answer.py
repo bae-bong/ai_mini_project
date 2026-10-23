@@ -1,6 +1,6 @@
 """
 /rag-query 응답 구성 헬퍼 (feat/rag-response)
-- search_law: 법령 검색 (지금은 FAISS 의미 검색, law_pipeline 머지 후 hybrid search로 교체)
+- search_law: 법령 검색 (pgvector + BM25 순위 결합)
 - law_sources: 검색 결과 → 응답 sources (law_pipeline.schema.law_sources 와 같은 형식)
 - judge_needs_review: 위험 질문·근거 약함 판정
 - build_law_prompt: 근거 조문 + 페르소나를 넣은 프롬프트
@@ -12,7 +12,7 @@ REVIEW_NOTICE = "※ 개별 사안의 법적 판단은 노무사 등 전문가 �
 
 # 개별 판단이 필요한 위험 질문 키워드
 RISK_KEYWORDS = ("해고", "부당", "체불", "분쟁", "소송", "고소", "진정", "징계", "산재", "손해배상")
-# FAISS L2 거리: 작을수록 유사. 최상위 결과가 이보다 멀면 근거가 약하다고 본다 (Day 3 평가로 조정)
+# squared L2 거리: 작을수록 유사. 최상위 결과가 이보다 멀면 근거가 약하다고 본다 (Day 3 평가로 조정)
 WEAK_DISTANCE = float(os.getenv("RAG_WEAK_DISTANCE", "0.5"))
 
 

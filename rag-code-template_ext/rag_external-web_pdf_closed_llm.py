@@ -2,10 +2,9 @@
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Query, Depends
 from core.auth import get_current_user
-from sqlalchemy.ext.asyncio import create_async_engine
 from fastapi.responses import JSONResponse
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.vectorstores import FAISS
+from core.vector_store import PgVectorStore
 from langchain_openai import ChatOpenAI
 from langchain_openai import OpenAIEmbeddings
 from pydantic import BaseModel, Field
@@ -62,10 +61,6 @@ LLM_SEED = int(os.getenv("RAG_SEED", "42"))
 if not OPENAI_API_KEY:
     raise RuntimeError("OPENAI_API_KEY가 설정되지 않았습니다.")
 
-# ✅ DB 연결 정보
-ASYNC_DB_URL = os.getenv("ASYNC_DB_URL", "mysql+aiomysql://root:password@127.0.0.1:53301/sql_db?charset=utf8mb4")
-engine = create_async_engine(ASYNC_DB_URL)
-
 # ✅ FastAPI 인스턴스
 app = FastAPI(
     title="RAG 기반 Closed Source LLM API Server",
@@ -74,11 +69,14 @@ app = FastAPI(
 )
 @app.get("/health", tags=["상태"])
 def health():
-    return {
-        "status": "ok",
-        "pdf_index": VECTORSTORE_PDF is not None,
-        "web_index": VECTORSTORE_WEB is not None,
-    }
+    try:
+        pdf = VECTORSTORE_PDF.info()
+        web = VECTORSTORE_WEB.info()
+    except Exception:
+        raise HTTPException(status_code=503, detail="PostgreSQL 상태 확인 실패")
+    return {"status": "ok", "storage": "pgvector",
+            "pdf_index": bool(pdf and pdf["vectors"]),
+            "web_index": bool(web and web["vectors"])}
 
 from fastapi.middleware.cors import CORSMiddleware
 app.add_middleware(
@@ -86,7 +84,7 @@ app.add_middleware(
     allow_origins=["http://localhost:5174",
                    "http://127.0.0.1:5174",
                    "http://[::1]:5174",         # IPv6도 허용
-                   "http://localhost:8001","*"],
+                   "http://localhost:8001"],
     allow_methods=["*"], allow_headers=["*"], allow_credentials=True,
 )
 
@@ -102,37 +100,10 @@ add_logging_middleware(app)
 async def me(current_user: dict = Depends(get_current_user)):
     return current_user
 
-# ✅ 전역 벡터 저장소
-VECTORSTORE_WEB = None
-VECTORSTORE_PDF = None
-
-# 벡터 스토어 전역 변수
-VECTORSTORE_WEB = None
-VECTORSTORE_PDF = None
-
-# ✅ 외부 (웹검색, OpenAI 전용)
-web_path = "faiss_db/web"
-if os.path.exists(f"{web_path}/index.faiss") and os.path.exists(f"{web_path}/index.pkl"):
-    VECTORSTORE_WEB = FAISS.load_local(
-        web_path,
-        embeddings=OpenAIEmbeddings(),
-        allow_dangerous_deserialization=True
-    )
-    print("✅ VECTORSTORE_WEB 로드 완료")
-else:
-    print("❌ VECTORSTORE_WEB 벡터화된 파일이 없습니다.")
-
-# ✅ PDF (업로드용, OpenAI 전용)
-pdf_path = "faiss_db/pdf"
-if os.path.exists(f"{pdf_path}/index.faiss") and os.path.exists(f"{pdf_path}/index.pkl"):
-    VECTORSTORE_PDF = FAISS.load_local(
-        pdf_path,
-        embeddings=OpenAIEmbeddings(),  # ← 오타 수정
-        allow_dangerous_deserialization=True
-    )
-    print("✅ VECTORSTORE_PDF 로드 완료")
-else:
-    print("❌ VECTORSTORE_PDF 벡터화된 파일이 없습니다.")
+# Collections are queried from PostgreSQL on every request; CLI ingestion is
+# visible immediately without restarting the RAG server.
+VECTORSTORE_WEB = PgVectorStore("web")
+VECTORSTORE_PDF = PgVectorStore("pdf")
 
 # ✅ PDF 텍스트 추출
 def load_paper(file_path: str) -> str:
@@ -148,7 +119,6 @@ async def upload_topic(
     try:
         import os, re, aiohttp
         from langchain_text_splitters import RecursiveCharacterTextSplitter
-        from langchain_community.vectorstores import FAISS
         from langchain_openai import OpenAIEmbeddings
 
         # ---- 1) 네이버 뉴스 검색: headers/params 전달 + 페이지네이션 ----
@@ -214,14 +184,9 @@ async def upload_topic(
         if not docs:
             return {"message": "벡터화할 문서가 없습니다.", "collected": len(items)}
 
-        # ---- 4) 벡터화 ----
-        global VECTORSTORE_WEB
-        VECTORSTORE_WEB = FAISS.from_documents(docs, OpenAIEmbeddings())
-
-        # ---- 5) 디스크 저장 ----
-        save_path = "faiss_db/web"
-        os.makedirs(save_path, exist_ok=True)
-        VECTORSTORE_WEB.save_local(save_path)
+        # Keep this legacy collector disabled; persist its results in pgvector.
+        vectors = VECTORSTORE_WEB._client().embed_documents([d.page_content for d in docs])
+        VECTORSTORE_WEB.write_vectors(docs, vectors, mode="replace")
 
         return {
             "message": f"{len(docs)}개의 웹 문서(청크) 벡터화 및 저장 완료",
@@ -239,16 +204,18 @@ async def upload_pdf(
     category: str = Form("노무", description="노무 | 우대기업"),
     current_user: dict = Depends(get_current_user),
 ):
-    if not file.filename.endswith(".pdf"):
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="PDF 파일만 허용됩니다.")
-    # law_pipeline이 만든 인덱스(manifest.json 존재)에는 섞지 않는다 (chunk_id·law_id 필드 불일치)
-    if os.path.exists("faiss_db/pdf/manifest.json"):
-        raise HTTPException(status_code=409, detail="법령 인덱스는 law_pipeline으로 관리됩니다. `python -m law_pipeline build`를 사용하세요.")
+    info = VECTORSTORE_PDF.info()
+    if info and info["manifest"].get("managed_by") == "law_pipeline":
+        raise HTTPException(status_code=409, detail="법령 컬렉션은 law_pipeline build로 관리됩니다.")
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
             tmp.write(await file.read())
             tmp_path = tmp.name
         try:
+            if not load_paper(tmp_path).strip():
+                raise HTTPException(status_code=422, detail="PDF에서 텍스트를 추출하지 못했습니다.")
             chunks = build_law_chunks(tmp_path, file.filename, category)
         finally:
             os.unlink(tmp_path)
@@ -259,17 +226,7 @@ async def upload_pdf(
         # [Q01 개선] 고정 500자 → 조 단위 청킹(최대 1,000자, 중첩 150) + '법령명 조문(제목)' 머리글
         docs = [Document(page_content=c["page_content"], metadata=c["metadata"]) for c in chunks]
 
-        global VECTORSTORE_PDF
-        # [Q02] 적재·검색 임베딩 모델 일치 (OpenAIEmbeddings)
-        new_store = FAISS.from_documents(docs, OpenAIEmbeddings())
-        if VECTORSTORE_PDF is None:
-            VECTORSTORE_PDF = new_store
-        else:
-            VECTORSTORE_PDF.merge_from(new_store)
-
-        # ✅ 디스크에 저장
-        os.makedirs("faiss_db/pdf", exist_ok=True)
-        VECTORSTORE_PDF.save_local("faiss_db/pdf")
+        VECTORSTORE_PDF.add_documents(docs, source_file=file.filename)
 
         return {
             "message": f"{len(docs)}개 조문 청크 적재 완료",
@@ -287,7 +244,7 @@ async def upload_pdf(
 class RAGRequest(BaseModel):
     prompt: str = Field(default=..., description="질문 프롬프트")
     source: str = Field(default=..., description="web | pdf")
-    top_k: int = Field(default=5, ge=1, description="검색할 결과 수 (기본값 5)")
+    top_k: int = Field(default=5, ge=1, le=20, description="검색할 결과 수 (기본값 5)")
 
     class Config:
         validate_by_name = True
@@ -357,7 +314,7 @@ async def rag_query(
 ):
     # 1. 벡터스토어 및 LLM 결정
     if rag_request.source == "web":
-        if VECTORSTORE_WEB is None:
+        if not (VECTORSTORE_WEB.info() or {}).get("vectors"):
             raise HTTPException(
                 status_code=400,
                 detail="❗ 외부 WEB 벡터값이 로딩되지 않았습니다. 먼저 외부 정보를 수집해서 벡터화를 진행해주세요.",
@@ -367,7 +324,7 @@ async def rag_query(
         llm_type = "openai" # huggingface
 
     elif rag_request.source == "pdf":
-        if VECTORSTORE_PDF is None:
+        if not (VECTORSTORE_PDF.info() or {}).get("vectors"):
             raise HTTPException(
                 status_code=400,
                 detail="❗ PDF 벡터값이 로딩되지 않았습니다. 먼저 PDF 파일을 벡터화해주세요.",
@@ -388,7 +345,7 @@ async def rag_query(
     # 2. 검색 및 LLM 응답 생성
     try:
         source = rag_request.source
-        top_k = max(5, (rag_request.top_k or 5))
+        top_k = rag_request.top_k
 
         # -------------------- PDF: 검색 결과 확인 + 안정적인 응답 처리 --------------------
         if source == "pdf":
@@ -396,7 +353,7 @@ async def rag_query(
             # [설계 판단] 사용자 질문을 기준으로 선택된 벡터 저장소에서 상위 top_k개 문서와 거리 점수를 가져오세요.
             # [TODO Q04] 아래 ... 부분을 적절한 코드로 교체하세요.
             # 페르소나: feat-auth-api 머지 후 current_user["persona"] 로 교체
-            persona = None
+            persona = current_user.get("persona")
 
             # [Q04] 법령 검색 (law_pipeline 머지 후 search_law 내부만 hybrid로 교체)
             rewritten = rewrite_query(llm, rag_request.prompt) if QUERY_REWRITE else None
@@ -409,7 +366,10 @@ async def rag_query(
                 print(f"[PDF 검색 {i}] 거리={score:.5f}, {m.get('law_name')} {m.get('article_no')}, 내용={doc.page_content[:120]!r}")
 
             needs_review, review_reason = judge_needs_review(rag_request.prompt, docs_scores)
-            sources = law_sources(docs_scores)
+            sources = retrieval["sources"]
+            if retrieval["needs_review"]:
+                needs_review = True
+                review_reason = review_reason or "적용례·부칙 확인 필요"
 
             run_config = {"search": os.getenv("RAG_SEARCH_MODE", "hybrid"), "prompt": PROMPT_VERSION,
                           "top_k": top_k, "temperature": LLM_TEMPERATURE, "seed": LLM_SEED,
@@ -417,6 +377,9 @@ async def rag_query(
             retrieved = retrieved_list(docs_scores)
 
             context = build_law_context(docs_scores)
+            supplementary = "\n\n".join(r["text"] for r in retrieval["supplementary_context"])
+            if supplementary:
+                context += "\n\n[관련 부칙·적용례]\n" + supplementary[:6000]
             if not context.strip():
                 return AnswerResponse(prompt=rag_request.prompt, response=NOT_FOUND,
                                       needs_review=True, review_reason="검색 근거 없음",
@@ -427,7 +390,6 @@ async def rag_query(
             # [Q05] 검색 근거를 LLM 답변으로 연결
             raw = llm.invoke([HumanMessage(content=full_prompt)]).content
             raw = raw.strip() if isinstance(raw, str) else str(raw).strip()
-            print(f"[PDF LLM 원본 응답] {raw[:1500]}")
             final = (extract_by_marker(raw) or raw).strip()
 
             if not final or final.upper() == "N/A" or NOT_FOUND in final:
