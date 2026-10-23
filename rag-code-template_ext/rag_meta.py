@@ -3,6 +3,7 @@
 - 법령 PDF: 머리말 제거 → 조 단위 분할 → 긴 조문은 재분할 → 메타데이터 부착
 - 공고: 신청기간 파싱, 마감 여부 계산
 """
+import os
 import re
 import unicodedata
 from datetime import date, datetime, timezone, timedelta
@@ -87,7 +88,26 @@ def split_law_articles(pages: list[tuple[int, str]]) -> list[dict]:
     return arts
 
 
-def build_law_chunks(path: str, filename: str, category: str, max_chars: int = 1000, overlap: int = 150) -> list[dict]:
+# 정의 조항의 각 호: 줄 맨 앞 "6. “퇴직급여제도”란", "1의2. "…"란" (번호 뒤 따옴표로 시작해야 호로 인정)
+DEF_ITEM_RE = re.compile(r'^\s*(\d+(?:의\d+)?)\.\s*[“"「]', re.M)
+
+
+def split_definition_items(article_text: str) -> list[tuple[str | None, str]]:
+    """정의 조항을 호 단위로 나눈다. [(호 번호, 텍스트)] — 첫 원소는 머리 문장(호 번호 None).
+    정의 조항이 아니거나 호가 2개 미만이면 [(None, 전체)]."""
+    hits = list(DEF_ITEM_RE.finditer(article_text))
+    if len(hits) < 2:
+        return [(None, article_text)]
+    intro = article_text[: hits[0].start()].strip()
+    out = []
+    for i, m in enumerate(hits):
+        end = hits[i + 1].start() if i + 1 < len(hits) else len(article_text)
+        out.append((m.group(1), article_text[m.start():end].strip()))
+    return [(None, intro)] + out if intro else out
+
+
+def build_law_chunks(path: str, filename: str, category: str, max_chars: int = 1000, overlap: int = 150,
+                     split_definitions: bool = os.getenv("RAG_SPLIT_DEFINITIONS", "1") == "1") -> list[dict]:
     """조 단위 청크 + 메타데이터. 반환: [{"page_content":..., "metadata":{...}}]"""
     filename = unicodedata.normalize("NFC", filename)
     info = law_info_from_filename(filename)
@@ -97,9 +117,15 @@ def build_law_chunks(path: str, filename: str, category: str, max_chars: int = 1
     chunks, idx = [], 0
     for a in arts:
         body = a["text"]
-        pieces = [body] if len(body) <= max_chars else [body[s:s + max_chars] for s in range(0, len(body), max_chars - overlap)]
-        for piece in pieces:
-            head = f"[{info['law_name']} {a['article_no'] or ''}{'(' + a['article_title'] + ')' if a['article_title'] else ''}]".replace(" ]", "]")
+        # 정의 조항은 호 단위로 쪼갠다 (용어 십수 개가 한 청크에 묻히는 문제)
+        if split_definitions and a["article_title"] and "정의" in a["article_title"]:
+            units = split_definition_items(body)
+        else:
+            units = [(None, body)]
+        for item_no, unit in units:
+          pieces = [unit] if len(unit) <= max_chars else [unit[s:s + max_chars] for s in range(0, len(unit), max_chars - overlap)]
+          for piece in pieces:
+            head = f"[{info['law_name']} {a['article_no'] or ''}{'(' + a['article_title'] + ')' if a['article_title'] else ''}{' ' + item_no + '호' if item_no else ''}]".replace(" ]", "]")
             chunks.append({
                 # 검색 정확도를 위해 본문 앞에 '법령명 조문(제목)'을 붙인다
                 "page_content": f"{head}\n{piece}",
@@ -117,6 +143,7 @@ def build_law_chunks(path: str, filename: str, category: str, max_chars: int = 1
                     "article_no": a["article_no"],
                     "article_title": a["article_title"],
                     "effective_date": info["effective_date"],
+                    "item_no": item_no,
                 },
             })
             idx += 1
