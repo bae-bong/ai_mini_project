@@ -15,6 +15,7 @@ uploads/
 *.webm
 faiss_db/
 bin/
+<<<<<<< Updated upstream
 
 # Reproducible law-pipeline outputs
 rag-code-template_ext/data/laws/processed/
