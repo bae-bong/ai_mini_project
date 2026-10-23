@@ -41,6 +41,19 @@ class ParserTests(unittest.TestCase):
         self.assertIn("제2조에 따른", records[0]["text"])
         self.assertTrue(all(r["status"] == "supplement" for r in records[1:]))
 
+    def test_definition_article_split_by_item(self):
+        records = self.parse("제2조(정의) 이 법에서 사용하는 용어의 뜻은 다음과 같다.\n1. “근로자”란 사람을 말한다.\n"
+                             "2. “사용자”란 사업주를 말한다.\n제3조(기타) 본문")
+        chunks = chunk_records(records)
+        defs = [c for c in chunks if c["metadata"]["article_no"] == "제2조"]
+        self.assertEqual([c["metadata"]["item_no"] for c in defs], ["1", "2"])
+        self.assertTrue(all("용어의 뜻은" in c["page_content"] for c in defs))
+        self.assertIn("“사용자”", defs[1]["page_content"])
+        self.assertNotIn("“근로자”", defs[1]["page_content"])
+        self.assertEqual(len({c["metadata"]["chunk_id"] for c in chunks}), len(chunks))
+        self.assertEqual(len([c for c in chunk_records(records, split_definitions=False)
+                              if c["metadata"]["article_no"] == "제2조"]), 1)
+
     def test_chunk_coverage_and_actual_page_metadata(self):
         records = self.parse("제1조(긴조문) " + "가" * 150, "나" * 150)
         chunks = chunk_records(records, 100, 20)

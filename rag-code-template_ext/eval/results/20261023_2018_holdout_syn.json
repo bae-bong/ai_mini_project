@@ -1,0 +1,50 @@
+{
+  "label": "holdout_syn",
+  "time": "20261023_2018",
+  "top_k": 20,
+  "repeat": 1,
+  "employees": null,
+  "n": 6,
+  "config": "{\"search\": \"hybrid\", \"prompt\": \"v2\", \"top_k\": 20, \"temperature\": 0.0, \"seed\": 42, \"query_rewrite\": false, \"synonyms\": true, \"rewritten\": \"하루 8시간 일하면 쉬는 시간은 얼마나 줘야 해? (휴게)\"}",
+  "grounded_rate": {
+    "mean": 1.0,
+    "min": 1.0,
+    "max": 1.0
+  },
+  "accuracy_rate": {
+    "mean": 1.0,
+    "min": 1.0,
+    "max": 1.0
+  },
+  "hallucination_rate": {
+    "mean": 0.0,
+    "min": 0.0,
+    "max": 0.0
+  },
+  "review_detect_rate": null,
+  "latency_ms_p50": {
+    "mean": 2354.0,
+    "min": 2354,
+    "max": 2354
+  },
+  "latency_ms_max": {
+    "mean": 5179.0,
+    "min": 5179,
+    "max": 5179
+  },
+  "flaky_ids": [],
+  "runs": [
+    {
+      "grounded_rate": 1.0,
+      "grounded_n": 5,
+      "accuracy_rate": 1.0,
+      "accuracy_n": 5,
+      "hallucination_rate": 0.0,
+      "hallucination_n": 1,
+      "review_detect_rate": null,
+      "review_n": 0,
+      "latency_ms_p50": 2354,
+      "latency_ms_max": 5179
+    }
+  ]
+}
