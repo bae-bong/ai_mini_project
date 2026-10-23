@@ -8,8 +8,9 @@
 - [기존 서버에 GitHub 최신 코드 반영](#기존-서버에-github-최신-코드-반영)
 - [다시 켜기와 중지](#다시-켜기와-중지)
 - [자주 발생하는 문제](#자주-발생하는-문제)
+- [DuckDNS 공개 HTTPS 연결](#duckdns-공개-https-연결)
 
-현재는 **SSH 터널로 접속하는 팀 테스트 구성**이다. EC2의 8080 포트는 외부에 공개하지 않는다. 일반 사용자에게 공개하려면 도메인·HTTPS 설정을 별도로 진행한다.
+기본 구성은 **SSH 터널로 접속하는 팀 테스트 구성**이다. EC2의 8080 포트는 외부에 공개하지 않는다. `skala-ai.duckdns.org`를 통한 공개 접속은 아래 [DuckDNS 공개 HTTPS 연결](#duckdns-공개-https-연결)을 적용한다. 공개 모드 적용 후에는 업데이트·재기동 시에도 두 Compose 파일을 함께 사용한다.
 
 명령어를 입력하는 위치를 먼저 구분한다.
 
@@ -255,6 +256,138 @@ SSH 창을 닫으면 터널만 닫히고 `-d`로 실행한 서비스는 계속 �
 cd ~/ai_mini_project
 sudo docker compose logs --tail=100 auth rag nginx
 ```
+
+## DuckDNS 공개 HTTPS 연결
+
+현재 도메인은 **skala-ai.duckdns.org**다. 2026-10-23 DNS 조회 시 도메인과 기존 EC2 퍼블릭 DNS가 모두 `32.236.191.133`을 가리키는 것을 확인했다. 이후 EC2 중지·시작으로 IP가 바뀌면 DuckDNS도 현재 IP로 갱신해야 한다. 아래 설정은 EC2에서 적용하기 전까지 외부에 공개되지 않는다.
+
+`compose.public.yaml`은 공개 배포용 추가 설정이다. 기본 Compose의 DB·백엔드 비공개와 로컬 8080 접속을 유지하면서 Nginx의 80/443만 추가 공개한다. 인증서 발급 전에는 HTTP에서 로그인·상담을 제공하지 않는다.
+
+### 1. AWS 보안 그룹 설정
+
+EC2 콘솔에서 현재 인스턴스에 연결된 보안 그룹의 인바운드 규칙에 추가한다.
+
+| 종류 | TCP 포트 | IPv4 소스 |
+|---|---|---|
+| HTTP | 80 | `0.0.0.0/0` |
+| HTTPS | 443 | `0.0.0.0/0` |
+| SSH | 22 | 관리자 공인 IP만 유지 |
+
+8001·8080·5432는 외부에 열지 않는다. HTTP-01 인증서 발급·갱신에는 80 포트가 필요하므로 발급 후에도 유지한다. [Let's Encrypt 인증 방식](https://letsencrypt.org/docs/challenge-types/)
+
+### 2. EC2에서 최신 설정과 Certbot 준비
+
+로컬 변경사항을 커밋·push한 뒤 **EC2 터미널**에서 실행한다. 기존 auth/rag/db가 동작 중인 서버를 기준으로 한다.
+
+```sh
+cd ~/ai_mini_project
+git pull --ff-only origin feat-devops
+sudo apt update
+sudo apt install -y certbot
+sudo mkdir -p /var/www/certbot/.well-known/acme-challenge /etc/letsencrypt
+getent ahostsv4 skala-ai.duckdns.org
+```
+
+주소가 현재 EC2 퍼블릭 IPv4와 일치해야 한다. 불필요한 AAAA 레코드가 있다면 실제 IPv6 접속도 가능한지 확인하거나 DuckDNS에서 정리한다. 이 절차에서는 DuckDNS 토큰이 필요하지 않다.
+
+### 3. 인증서 발급용 HTTP만 시작
+
+**EC2 터미널**에서 실행한다. `PUBLIC_NGINX_CONFIG`는 이 명령에만 적용하며 `.env`에 저장하지 않는다.
+
+```sh
+sudo env PUBLIC_NGINX_CONFIG=./deploy/nginx/domain-http.conf \
+  docker compose -f compose.yaml -f compose.public.yaml \
+  up -d --no-deps --no-build --force-recreate --wait nginx
+printf '%s\n' 'duckdns-check' | sudo tee /var/www/certbot/.well-known/acme-challenge/duckdns-check
+```
+
+**Mac 또는 다른 외부 컴퓨터**에서 아래 주소를 확인한다. SSH 터널은 필요하지 않다.
+
+```sh
+curl -fsS --max-time 10 http://skala-ai.duckdns.org/.well-known/acme-challenge/duckdns-check
+```
+
+`duckdns-check`가 나오면 DNS·80 포트·인증용 파일 경로가 연결된 것이다. 연결 실패 시 DNS와 보안 그룹부터 확인하고 다음 단계로 넘어가지 않는다. 이 단계에서 일반 페이지의 HTTP 503은 HTTPS 준비 중 안내로 정상이다.
+
+### 4. 인증서 발급
+
+**EC2 터미널**에서 실행한다. 이메일·이용약관 등은 Certbot이 묻는 내용을 확인해 직접 입력한다. Docker Nginx를 사용하므로 호스트 Nginx를 수정하는 `certbot --nginx` 대신 webroot 방식을 쓴다.
+
+```sh
+sudo certbot certonly --webroot -w /var/www/certbot \
+  --cert-name skala-ai.duckdns.org -d skala-ai.duckdns.org
+```
+
+성공 후 `/etc/letsencrypt/live/skala-ai.duckdns.org/`에 인증서가 있어야 한다. 개인키는 Git이나 채팅에 공유하지 않는다. 인증서 발급이 실패했다면 HTTPS 설정을 시작하지 않고 Certbot 오류부터 해결한다.
+
+### 5. HTTPS 적용
+
+**EC2 터미널**에서 실행한다. 이번에는 `PUBLIC_NGINX_CONFIG`를 지정하지 않아 기본 공개 HTTPS 설정이 선택된다.
+
+```sh
+sudo docker compose -f compose.yaml -f compose.public.yaml \
+  up -d --no-deps --no-build --force-recreate --wait nginx
+sudo docker compose -f compose.yaml -f compose.public.yaml exec -T nginx nginx -t
+sudo docker compose -f compose.yaml -f compose.public.yaml ps
+```
+
+외부 컴퓨터에서 확인한다. 운영 확인에 `curl -k`로 인증서 검증을 생략하지 않는다.
+
+```sh
+curl -I --max-time 10 http://skala-ai.duckdns.org/login
+curl -I --max-time 10 https://skala-ai.duckdns.org/login
+curl -fsS --max-time 10 https://skala-ai.duckdns.org/api/rag/health
+```
+
+HTTP는 HTTPS로 308 이동하고, HTTPS 로그인 페이지와 RAG 상태 요청은 200이어야 한다. 브라우저에서 **https://skala-ai.duckdns.org/signup**으로 가입·로그인을 확인한다. HTTPS에서 발급하는 인증 쿠키에는 Nginx가 Secure 속성을 추가한다. 서버 `.env`나 DB·백엔드 코드를 이 도메인 때문에 변경할 필요는 없다.
+
+### 6. 자동 갱신과 Nginx 재로드
+
+**EC2 터미널**에서 갱신 후 실행할 hook을 설치한다. 프로젝트를 다른 경로에 clone했다면 아래 `cd`를 실제 경로로 바꾼다. 이 설정은 한 번만 설치한다.
+
+```sh
+sudo mkdir -p /etc/letsencrypt/renewal-hooks/deploy
+sudo tee /etc/letsencrypt/renewal-hooks/deploy/10-reload-project-nginx.sh > /dev/null <<'HOOK'
+#!/bin/sh
+set -eu
+cd /home/ubuntu/ai_mini_project
+docker compose -f compose.yaml -f compose.public.yaml exec -T nginx nginx -t
+docker compose -f compose.yaml -f compose.public.yaml exec -T nginx nginx -s reload
+HOOK
+sudo chmod 755 /etc/letsencrypt/renewal-hooks/deploy/10-reload-project-nginx.sh
+sudo systemctl enable --now certbot.timer
+sudo systemctl list-timers certbot.timer
+sudo certbot renew --dry-run
+sudo /etc/letsencrypt/renewal-hooks/deploy/10-reload-project-nginx.sh
+```
+
+Certbot은 호스트 인증서를 갱신하고 Nginx는 디렉터리 마운트를 통해 새 파일을 읽는다. 성공적인 갱신 후 hook이 Nginx를 재로드한다. timer·dry-run·hook 명령이 성공하는지 확인한다. [Certbot 갱신 안내](https://eff-certbot.readthedocs.io/en/stable/using.html#renewing-certificates)
+
+### 공개 모드에서 업데이트·재기동
+
+이후에는 항상 기본 파일과 공개 파일을 함께 사용한다. 기본 파일만으로 Nginx를 재생성하면 SSH 전용 설정으로 되돌아간다.
+
+```sh
+cd ~/ai_mini_project
+git pull --ff-only origin feat-devops
+sudo docker compose -f compose.yaml -f compose.public.yaml up -d --build --wait
+sudo docker compose -f compose.yaml -f compose.public.yaml \
+  up -d --no-deps --no-build --force-recreate --wait nginx
+```
+
+코드 변경 없이 EC2만 다시 켰다면 다음으로 충분하다.
+
+```sh
+sudo docker compose -f compose.yaml -f compose.public.yaml up -d --no-build --wait
+```
+
+문제가 생겨 SSH 전용으로 되돌릴 때는 인증서와 DB를 삭제하지 않고 Nginx만 기본 설정으로 재생성한다.
+
+```sh
+sudo docker compose -f compose.yaml up -d --no-deps --no-build --force-recreate --wait nginx
+```
+
+공개 설정의 로컬 검증은 `python3 deploy/test_https.py`로 실행한다. 임시 자체서명 인증서와 임시 컨테이너만 사용하며 실제 인증서를 발급하지 않는다.
 
 ## Docker Engine·Compose 최초 설치
 
