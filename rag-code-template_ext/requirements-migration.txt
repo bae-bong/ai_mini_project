@@ -1,0 +1,2 @@
+# One-time trusted local FAISS import only; absent from the production image.
+faiss-cpu>=1.7,<2

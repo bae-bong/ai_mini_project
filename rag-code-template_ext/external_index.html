@@ -181,10 +181,8 @@ window.addEventListener('DOMContentLoaded', () => {
   createApp({
     data(){
       const saved = localStorage.getItem('closed_rag_base_url');
-      const guess = (saved ? saved :
-        (location.origin === 'null' || location.protocol === 'file:') ? 'http://localhost:8001'
-          : (location.hostname === 'localhost' || location.hostname === '127.0.0.1') ? 'http://localhost:8001'
-          : location.origin);
+      const guess = saved || ((location.origin === 'null' || location.protocol === 'file:')
+        ? 'http://localhost:8001' : location.origin + '/api/rag');
       return {
         baseUrl: normalizeBaseUrl(guess),
         debug: false,
@@ -210,7 +208,7 @@ window.addEventListener('DOMContentLoaded', () => {
       async _postJson(path, body){
         const url = this.baseUrl.replace(/\/+$/,'') + path;
         const t0 = performance.now();
-        const res = await fetch(url, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
+        const res = await fetch(url, { method:'POST', credentials:'include', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
         const latency = Math.round(performance.now() - t0);
         if(!res.ok){
           const msg = await res.text().catch(()=>res.statusText);
@@ -223,7 +221,7 @@ window.addEventListener('DOMContentLoaded', () => {
       async _postForm(path, formData){
         const url = this.baseUrl.replace(/\/+$/,'') + path;
         const t0 = performance.now();
-        const res = await fetch(url, { method:'POST', body: formData });
+        const res = await fetch(url, { method:'POST', credentials:'include', body: formData });
         const latency = Math.round(performance.now() - t0);
         if(!res.ok){
           const msg = await res.text().catch(()=>res.statusText);
