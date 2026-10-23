@@ -108,7 +108,7 @@ Modification history:
 public class SimpleAuthServer {
 
     // ==== DB CONFIG (modify according to your environment) ==== //
-    private static final String DB_URL = "jdbc:mariadb://localhost:53301/sql_db";
+    private static final String DB_URL = System.getenv().getOrDefault("DB_URL", "jdbc:mariadb://localhost:53301/sql_db");
     private static final String DB_USER = "root";
     private static final String DB_PASSWORD = System.getenv("DB_PASSWORD");
 
@@ -125,6 +125,8 @@ public class SimpleAuthServer {
     // ==== CORS (dev) ==== //
     // In case frontend (8008) calls Java API (8080)
     private static final String DEV_FRONTEND_ORIGIN = "http://localhost:8008";
+    private static final String LOGIN_REDIRECT =
+            System.getenv().getOrDefault("LOGIN_REDIRECT", "http://localhost:8008/index.html");
 
     // ==== DEBUG ==== //
     private static final boolean DEBUG = true;
@@ -219,9 +221,20 @@ public class SimpleAuthServer {
                 return;
             }
 
+            // 페르소나: 직원 수(필수), 기업 유형(선택, 쉼표 구분)
+            Integer employees;
+            try {
+                employees = Integer.parseInt(trimToNull(params.get("employees")));
+                if (employees < 0) throw new NumberFormatException();
+            } catch (Exception e) {
+                writeText(exchange, 400, "employees must be a non-negative number");
+                return;
+            }
+            String companyTypes = trimToNull(params.get("companyTypes"));
+
             try {
                 //  회원가입 요청을 어떤 계층으로 위임해야 하는가?
-                authService.signUp(username, password);redirect(exchange, "/login");
+                authService.signUp(username, password, companyTypes, employees);redirect(exchange, "/login");
             } catch (SQLIntegrityConstraintViolationException dup) {
                 writeText(exchange, 400, "username already exists");
             } catch (Exception e) {
@@ -284,7 +297,7 @@ public class SimpleAuthServer {
                 // 4) (Most important) Do not redirect here — end with 200 JSON response
                 //    → In fetch/XHR environments, 302 redirects easily cause HTTP 0/cancellation
                 //  fetch 호출에서는 서버 302 대신 성공 JSON으로 이동 경로를 알립니다.
-                writeJson(exchange, 200, "{\"ok\":true,\"redirect\":\"http://localhost:8008/index.html\"}");System.out.println("[LOGIN] SUCCESS -> 200 JSON (no redirect)");
+                writeJson(exchange, 200, "{\"ok\":true,\"accessToken\":\"" + jwt + "\",\"redirect\":\"" + LOGIN_REDIRECT + "\"}");System.out.println("[LOGIN] SUCCESS -> 200 JSON (no redirect)");
                 return;
 
             } catch (Exception e) {
@@ -485,7 +498,7 @@ public class SimpleAuthServer {
             String[] kv = pair.split("=", 2);
             String key = urlDecode(kv[0]);
             String value = kv.length > 1 ? urlDecode(kv[1]) : "";
-            params.put(key, value);
+            params.merge(key, value, (a, b) -> a + "," + b);
         }
         return params;
     }
@@ -578,6 +591,15 @@ public class SimpleAuthServer {
 
         public String getPassword() { return password; }
         public void setPassword(String password) { this.password = password; }
+
+        private String companyTypes;   // 쉼표 구분 (예: 여성기업,창업기업)
+        private Integer employees;     // 상시근로자 수
+
+        public String getCompanyTypes() { return companyTypes; }
+        public void setCompanyTypes(String companyTypes) { this.companyTypes = companyTypes; }
+
+        public Integer getEmployees() { return employees; }
+        public void setEmployees(Integer employees) { this.employees = employees; }
     }
 
     public interface UserRepository {
@@ -602,11 +624,14 @@ public class SimpleAuthServer {
 
         @Override
         public void save(User u) throws Exception {
-            String sql = "INSERT INTO users(username, password) VALUES(?, ?)";
+            String sql = "INSERT INTO users(username, password, company_types, employees) VALUES(?, ?, ?, ?)";
             try (Connection conn = getConnection();
                  PreparedStatement ps = conn.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS)) {
                 //  SQL의 ? 자리와 사용자 필드를 연결하세요(문자열 결합 SQL 금지).
-                ps.setString(1, u.getUsername());ps.setString(2, u.getPassword());ps.executeUpdate();
+                ps.setString(1, u.getUsername());ps.setString(2, u.getPassword());
+                ps.setString(3, u.getCompanyTypes());
+                if (u.getEmployees() == null) ps.setNull(4, java.sql.Types.INTEGER); else ps.setInt(4, u.getEmployees());
+                ps.executeUpdate();
                 try (ResultSet rs = ps.getGeneratedKeys()) {
                     if (rs.next()) {
                         u.setId(rs.getLong(1));
@@ -617,7 +642,7 @@ public class SimpleAuthServer {
 
         @Override
         public User findByUsername(String username) throws Exception {
-            String sql = "SELECT id, username, password FROM users WHERE username = ?";
+            String sql = "SELECT id, username, password, company_types, employees FROM users WHERE username = ?";
             try (Connection conn = getConnection();
                  PreparedStatement ps = conn.prepareStatement(sql)) {
                 ps.setString(1, username);
@@ -627,6 +652,9 @@ public class SimpleAuthServer {
                         u.setId(rs.getLong("id"));
                         u.setUsername(rs.getString("username"));
                         u.setPassword(rs.getString("password"));
+                        u.setCompanyTypes(rs.getString("company_types"));
+                        int emp = rs.getInt("employees");
+                        u.setEmployees(rs.wasNull() ? null : emp);
                         return u;
                     }
                 }
@@ -642,7 +670,8 @@ public class SimpleAuthServer {
             this.userRepository = userRepository;
         }
 
-        public void signUp(String username, String rawPassword) throws Exception {
+        public void signUp(String username, String rawPassword,
+                           String companyTypes, Integer employees) throws Exception {
             username = trimToNull(username);
             if (rawPassword != null) rawPassword = rawPassword.trim();
 
@@ -657,6 +686,8 @@ public class SimpleAuthServer {
             User u = new User();
             u.setUsername(username);
             u.setPassword(hashed);
+            u.setCompanyTypes(companyTypes);
+            u.setEmployees(employees);
             userRepository.save(u);
         }
 
@@ -699,6 +730,10 @@ public class SimpleAuthServer {
                     //  JWT가 무기한 유효하지 않도록 발급 시점 기준 1시간 만료를 지정하세요.
                     .withExpiresAt(Date.from(now.plus(1, ChronoUnit.HOURS))).withSubject(String.valueOf(user.getId()))
                     .withClaim("username", user.getUsername())
+                    .withClaim("companyTypes", user.getCompanyTypes() == null
+                            ? java.util.List.<String>of()
+                            : java.util.Arrays.asList(user.getCompanyTypes().split(",")))
+                    .withClaim("employees", user.getEmployees())
                     .sign(ALG);
         }
 

@@ -41,4 +41,5 @@ langchain-text-splitters>=1.1.0
 # OpenAI + LangChain OpenAI (중요: 1.x 사용)
 langchain-openai==1.1.7
 openai==1.109.1
-tiktoken>=0.7,<1.0python-jose[cryptography]==3.3.0
+tiktoken>=0.7,<1.0
+python-jose[cryptography]==3.3.0

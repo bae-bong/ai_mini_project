@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ko">
 <head>
     <meta charset="UTF-8">
     <title>Sign Up</title>
@@ -15,6 +15,22 @@
         <label>Password
             <input type="password" name="password" required>
         </label>
+
+        <label>상시근로자 수 (대표 제외)
+            <input type="number" name="employees" min="0" value="0" required>
+        </label>
+
+        <fieldset>
+            <legend>기업 유형 (해당하는 것 모두 선택, 선택 사항)</legend>
+            <label><input type="checkbox" name="companyTypes" value="소상공인"> 소상공인</label>
+            <label><input type="checkbox" name="companyTypes" value="창업기업"> 창업기업 (7년 이내)</label>
+            <label><input type="checkbox" name="companyTypes" value="청년창업기업"> 청년창업기업</label>
+            <label><input type="checkbox" name="companyTypes" value="여성기업"> 여성기업</label>
+            <label><input type="checkbox" name="companyTypes" value="장애인기업"> 장애인기업</label>
+            <label><input type="checkbox" name="companyTypes" value="벤처기업"> 벤처기업</label>
+            <label><input type="checkbox" name="companyTypes" value="사회적기업"> 사회적기업</label>
+        </fieldset>
+
         <button type="submit">Sign Up</button>
     </form>
     <p><a href="/login">Back to Login</a></p>
