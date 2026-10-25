@@ -8,6 +8,8 @@
       healthError: '', loadingHealth: false, source: 'pdf', question: '',
       submittedQuestion: '', answer: null, selectedFile: null, category: '노무',
       uploadResult: null, managed: false,
+      voiceSupported: VoiceChat.supported(),
+      voice: { recordingState: 'idle', recordingSeconds: 0, voiceMessage: '', voiceError: '', speechLoading: false, speechError: '', audioUrl: '' },
       account: { username: '', password: '', confirm: '', employees: 0, types: [] },
       sections: [{ value: 'pdf', label: '경영지원' }, { value: 'web', label: '사업공고' }],
       companyTypes: ['소상공인', '소기업·중소기업', '창업기업', '청년창업기업', '여성기업', '장애인기업', '벤처기업', '사회적기업'],
@@ -17,22 +19,25 @@
       isAuthPage() { return ['login', 'signup'].includes(this.page); },
       sourceLabel() { return this.source === 'pdf' ? '경영지원' : '사업공고'; },
       sourceReady() { return !!this.health?.[this.source === 'pdf' ? 'pdf_index' : 'web_index']; },
-      canAsk() { return !this.busy && this.sourceReady && !!this.question.trim(); },
+      voiceBusy() { return this.voice.recordingState !== 'idle'; },
+      canAsk() { return !this.busy && !this.voiceBusy && this.sourceReady && !!this.question.trim(); },
+      spokenAnswer() { return this.answer ? [this.answer.response, this.answer.needs_review ? '개별 사안은 전문가와 확인하세요.' : ''].filter(Boolean).join('\n') : ''; },
       employeeLabel() { const value = this.user?.persona?.employees; return value == null ? '미등록' : `${value}명`; },
       answerSources() { return Array.isArray(this.answer?.sources) ? this.answer.sources : []; },
       examples() { return this.source === 'pdf' ? ['상시근로자 5명 미만인 회사에는 어떤 근로 규정이 적용되나요?', '입사 1년 미만 직원의 연차휴가는 어떻게 확인하나요?', '퇴직금 지급 대상과 기준을 알려주세요.'] : ['청년을 채용할 때 확인할 수 있는 지원사업이 있나요?', '현재 신청할 수 있는 고용 관련 사업공고를 찾아주세요.', '창업기업을 위한 지원사업의 신청 조건이 궁금해요.']; },
     },
     methods: {
-      async api(path, options = {}) {
+      async api(path, options = {}, responseType = 'json') {
         let response;
         try { response = await fetch(path, { credentials: 'include', ...options }); }
-        catch { throw new Error('서버에 연결할 수 없어요. 연결 상태를 확인하고 다시 시도해 주세요.'); }
+        catch (error) { if (error.name === 'AbortError') throw error; throw new Error('서버에 연결할 수 없어요. 연결 상태를 확인하고 다시 시도해 주세요.'); }
+        if (response.ok && responseType === 'blob') return response.blob();
         const text = await response.text();
         let data;
         try { data = JSON.parse(text); } catch { data = { detail: text }; }
         if (!response.ok) {
           if (response.status === 401 && !this.isAuthPage) location.replace('/login?expired=1');
-          const message = this.errorMessage(response.status, data);
+          const message = path.startsWith('/api/voice/') && typeof data.detail === 'string' ? data.detail : this.errorMessage(response.status, data);
           throw Object.assign(new Error(message), { status: response.status });
         }
         return data;
@@ -93,6 +98,9 @@
         finally { this.busy = false; }
       },
       async logout() {
+        this.stopAudio();
+        this.voiceController?.cancelRecording();
+        this.voiceController?.resetSpeech();
         this.busy = true;
         this.sessionError = '';
         try { await this.api('/api/auth/logout', { method: 'POST' }); location.assign('/login'); }
@@ -100,7 +108,10 @@
         finally { this.busy = false; }
       },
       selectSource(value) {
-        if (this.busy || this.source === value) return;
+        if (this.busy || this.voiceBusy || this.source === value) return;
+        this.stopAudio();
+        this.voiceController?.cancelRecording();
+        this.voiceController?.resetSpeech();
         this.source = value;
         this.error = '';
         this.answer = null;
@@ -116,6 +127,9 @@
       focusQuestion() { document.getElementById('question').focus(); },
       async ask() {
         if (!this.canAsk) return;
+        this.stopAudio();
+        this.voiceController.cancelRecording();
+        this.voiceController.resetSpeech();
         this.busy = true;
         this.error = '';
         this.answer = null;
@@ -124,6 +138,23 @@
           this.answer = await this.api('/api/rag/rag-query', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt: this.submittedQuestion, source: this.source, top_k: 5 }) });
         } catch (error) { this.error = error.message; }
         finally { this.busy = false; }
+      },
+      startRecording() {
+        if (this.busy || !this.sourceReady) return;
+        this.stopAudio();
+        this.voiceController.startRecording();
+      },
+      stopRecording() { this.voiceController.stopRecording(); },
+      cancelRecording() { this.voiceController.cancelRecording(); },
+      stopAudio() { this.$refs.answerAudio?.pause(); },
+      async listen() {
+        if (!this.spokenAnswer.trim() || this.spokenAnswer.length > 4096) return;
+        await this.voiceController.loadSpeech(this.spokenAnswer);
+        if (this.voice.audioUrl) {
+          await this.$nextTick();
+          // Controls remain available if the browser disallows delayed playback.
+          this.$refs.answerAudio?.play().catch(() => {});
+        }
       },
       safeUrl(value) {
         if (!value) return null;
@@ -160,6 +191,20 @@
         finally { this.busy = false; }
       },
     },
-    mounted() { document.title = `${{ login: '로그인', signup: '회원가입', chat: 'AI 상담', documents: '자료 관리' }[this.page]} · 경영지원 AI`; this.initialize(); },
+    mounted() {
+      this.voiceController = VoiceChat.create({
+        onState: state => { this.voice = state; },
+        onAudio: (audio, signal) => {
+          const body = new FormData();
+          body.append('audio', audio, 'recording.audio');
+          return this.api('/api/voice/stt/', { method: 'POST', body, signal });
+        },
+        onText: text => { this.question = text; this.$nextTick(() => this.focusQuestion()); },
+        onSpeech: (text, signal) => this.api('/api/voice/tts/', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }), signal }, 'blob'),
+      });
+      document.title = `${{ login: '로그인', signup: '회원가입', chat: 'AI 상담', documents: '자료 관리' }[this.page]} · 경영지원 AI`;
+      this.initialize();
+    },
+    beforeUnmount() { this.voiceController?.dispose(); },
   }).mount('#app');
 })();

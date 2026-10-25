@@ -1,6 +1,6 @@
 import os
 import subprocess
-from faster_whisper import WhisperModel
+import threading
 
 # 1) Do not use GPU/MPS: fixed to CPU
 DEVICE = "cpu"
@@ -9,10 +9,20 @@ DEVICE = "cpu"
 #    Adjust to "base", "small", "medium", etc. as needed
 #    On CPU, int8 provides better speed/memory stability.
 MODEL_NAME = os.getenv("WHISPER_MODEL", "small")
-model = WhisperModel(MODEL_NAME, device=DEVICE, compute_type="int8")
+_model = None
+_model_lock = threading.Lock()
 
 
-def convert_webm_to_wav(webm_path: str, wav_path: str) -> None:
+def get_model():
+    global _model
+    with _model_lock:
+        if _model is None:
+            from faster_whisper import WhisperModel
+            _model = WhisperModel(MODEL_NAME, device=DEVICE, compute_type="int8")
+    return _model
+
+
+def convert_webm_to_wav(webm_path: str, wav_path: str, *, max_seconds: int | None = None) -> None:
     """
     Converts a webm file to a wav file.
     Calls ffmpeg directly. (More stable for installation/runtime than pydub)
@@ -27,15 +37,20 @@ def convert_webm_to_wav(webm_path: str, wav_path: str) -> None:
 
     cmd = [
         "ffmpeg",
+        "-nostdin",
+        "-v", "error",
         "-y",                # overwrite
+        "-protocol_whitelist", "file,pipe",
         "-i", webm_path,
         "-ac", "1",          # mono
         "-ar", "16000",      # 16kHz
         "-vn",               # no video
-        wav_path,
     ]
+    if max_seconds is not None:
+        cmd.extend(["-t", str(max_seconds)])
+    cmd.extend(["-c:a", "pcm_s16le", wav_path])
 
-    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=30)
     if proc.returncode != 0:
         raise RuntimeError(f"ffmpeg convert failed: {proc.stderr.strip()}")
 
@@ -49,7 +64,7 @@ def transcribe_audio_file_local(file_path: str) -> str:
         raise FileNotFoundError(f"Input not found: {file_path}")
 
     # faster-whisper returns a segments generator.
-    segments, info = model.transcribe(
+    segments, info = get_model().transcribe(
         file_path,
         beam_size=5,
         vad_filter=True,     # Remove silence (generally improves quality/speed)

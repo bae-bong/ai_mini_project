@@ -65,6 +65,31 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  voice:
+    build:
+      context: ./voice-ai_code
+      dockerfile: Dockerfile.voice
+    restart: unless-stopped
+    environment:
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?Set OPENAI_API_KEY in .env}
+      WHISPER_MODEL: ${WHISPER_MODEL:-small}
+      HF_HOME: /models
+      VOICE_TTS_MODEL: ${VOICE_TTS_MODEL:-tts-1}
+      VOICE_TTS_VOICE: ${VOICE_TTS_VOICE:-nova}
+    volumes:
+      - whisper_models:/models
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8008/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
   rag:
     build: ./rag-code-template_ext
     restart: unless-stopped
@@ -98,5 +123,6 @@ services:
         max-file: "3"
 
 volumes:
+  whisper_models:
   postgres_data:
   law_processed:
