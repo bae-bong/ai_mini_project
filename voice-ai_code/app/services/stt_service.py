@@ -55,7 +55,7 @@ def convert_webm_to_wav(webm_path: str, wav_path: str, *, max_seconds: int | Non
         raise RuntimeError(f"ffmpeg convert failed: {proc.stderr.strip()}")
 
 
-def transcribe_audio_file_local(file_path: str) -> str:
+def transcribe_audio_file_local(file_path: str, *, language: str | None = None) -> str:
     """
     Performs STT using the local Whisper model.
     (Uses faster-whisper)
@@ -66,6 +66,7 @@ def transcribe_audio_file_local(file_path: str) -> str:
     # faster-whisper returns a segments generator.
     segments, info = get_model().transcribe(
         file_path,
+        language=language,
         beam_size=5,
         vad_filter=True,     # Remove silence (generally improves quality/speed)
     )

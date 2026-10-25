@@ -106,6 +106,19 @@ class VoiceAPITests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         self.assertFalse(wav_path.exists())
 
+    def test_short_questions_use_korean_without_changing_legacy_auto_detection(self):
+        model = MagicMock()
+        model.transcribe.return_value = ([MagicMock(text="청년 채용 지원사업")], None)
+        with patch.object(stt_service, "get_model", return_value=model), patch.dict(os.environ, {"WHISPER_LANGUAGE": "ko"}):
+            response = self.upload(data=wav_bytes(), content_type="audio/wav")
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json()["text"], "청년 채용 지원사업")
+            self.assertEqual(model.transcribe.call_args.kwargs["language"], "ko")
+            import tempfile
+            with tempfile.NamedTemporaryFile() as audio:
+                stt_service.transcribe_audio_file(audio.name)
+            self.assertIsNone(model.transcribe.call_args.kwargs["language"])
+
     def test_overlong_and_malformed_audio_never_reach_whisper(self):
         with patch.object(stt_service, "transcribe_audio_file_local") as transcribe:
             with patch.object(voice_api, "MAX_AUDIO_SECONDS", 1):

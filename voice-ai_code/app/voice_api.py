@@ -1,6 +1,7 @@
 """Voice input/output for the existing RAG chat. No public audio files."""
 import asyncio
 import logging
+import os
 import subprocess
 import tempfile
 import wave
@@ -41,7 +42,10 @@ def transcribe_upload(path: Path) -> str:
         duration = audio.getnframes() / audio.getframerate()
     if duration > MAX_AUDIO_SECONDS:
         raise HTTPException(422, "음성은 60초 이내로 녹음해 주세요.")
-    return transcribe_audio_file_local(str(wav_path)).strip()
+    # Short Korean questions can otherwise be misdetected as another language.
+    return transcribe_audio_file_local(
+        str(wav_path), language=os.getenv("WHISPER_LANGUAGE") or "ko"
+    ).strip()
 
 
 @app.get("/health")

@@ -53,6 +53,7 @@ def main():
             assert 'id="app"' in request(path)
         assert "createApp" in request("/assets/app.js")
         assert "Vue" in request("/assets/vendor/vue.global.prod.js")
+        assert "VoiceChat" in request("/assets/voice.js")
         assert sql("SELECT extversion FROM pg_extension WHERE extname='vector'")
         assert sql("SELECT '[1,2,3]'::vector <-> '[1,2,3]'::vector") == "0"
         sql("CREATE TABLE smoke_persistence(id int); INSERT INTO smoke_persistence VALUES (42)")
@@ -62,6 +63,7 @@ def main():
         for attempt in range(30):
             try:
                 assert json.loads(request("/api/rag/health"))["storage"] == "pgvector"
+                assert json.loads(request("/api/voice/health"))["status"] == "ok"
                 request("/login")
                 break
             except (urllib.error.URLError, TimeoutError):
@@ -80,14 +82,28 @@ def main():
         req = urllib.request.Request(base + "/api/auth/check", headers={"Cookie": "ACCESS_TOKEN=" + token})
         with client.open(req, timeout=5) as response:
             assert json.load(response)["ok"]
+        # Verify the real Java JWT crosses the voice proxy without paid TTS calls.
+        for authenticated, expected in ((False, 401), (True, 422)):
+            headers = {"Content-Type": "application/json"}
+            if authenticated:
+                headers["Cookie"] = "ACCESS_TOKEN=" + token
+            req = urllib.request.Request(base + "/api/voice/tts/", data=b'{"text":""}', headers=headers)
+            try:
+                client.open(req, timeout=5)
+            except urllib.error.HTTPError as error:
+                assert error.code == expected, error.code
+            else:
+                raise AssertionError("Voice authentication/input validation was bypassed")
         assert sql("SELECT employees FROM users WHERE username='smoke-user'") == "3"
+        run(*COMPOSE, "run", "--rm", "--no-deps", "-v", str(ROOT / "voice-ai_code/tests") + ":/tests:ro",
+            "voice", "sh", "-c", 'pip install --quiet "httpx>=0.27,<1" && python -m unittest discover -s /tests -v')
         run(*COMPOSE, "exec", "-T", "-e", "RUN_DB_TESTS=1", "rag", "python", "-m", "unittest", "discover", "-s", "law_pipeline/tests", "-v")
         run(*COMPOSE, "exec", "-T", "-e", "RUN_DB_TESTS=1", "rag", "python", "-m", "unittest", "discover", "-s", "tests", "-v")
         # Optional FAISS is installed in this disposable container, not the production image.
         run(*COMPOSE, "run", "--rm", "--no-deps", "rag", "sh", "-c",
             "pip install --quiet -r requirements-migration.txt && "
             "RUN_DB_TESTS=1 python -m unittest discover -s tests -p test_faiss_migration.py -v")
-        print("PASS: static pages, real auth/PostgreSQL, Java JWT -> RAG, pgvector, persistence, law/API tests")
+        print("PASS: static pages, auth/PostgreSQL, Java JWT -> RAG/voice, pgvector, persistence, law/voice/API tests")
     finally:
         subprocess.run([*COMPOSE, "down", "-v"], cwd=ROOT, env=ENV, check=True)
 
