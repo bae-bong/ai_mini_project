@@ -39,10 +39,31 @@ TTS는 기존 Speech API를 재사용한다. 4,096자를 넘는 답변은 잘라
 
 루트 `.env`의 기존 `JWT_SECRET`, `OPENAI_API_KEY`를 사용한다. 선택 설정은 `.env.example`을 따른다.
 
+프론트 파일 배포만으로는 음성 기능이 동작하지 않는다. **같은 EC2에 `voice` 컨테이너를 하나 추가**하고 Nginx의 `/api/voice/` 프록시 설정을 반영해야 한다. TTS 모델을 EC2에 설치하는 구조가 아니라, `voice`가 OpenAI Speech API를 호출한다. 로컬 Whisper는 STT에만 사용한다.
+
+배포할 변경사항을 커밋·push하고 서버에서 해당 변경사항을 받은 뒤 프로젝트 루트에서 실행한다. 기존 배포와 같은 Compose 파일·프로젝트 설정을 유지한다. 특히 HTTPS 운영에서 Nginx를 기본 Compose만으로 재생성하면 공개 포트·인증서 마운트가 빠질 수 있으므로 아래 두 경우를 구분한다.
+
+**기존 HTTPS 공개 배포 (`compose.public.yaml` 사용):**
+
 ```sh
-docker compose up -d --build voice
-docker compose up -d --no-deps --force-recreate nginx
+sudo docker compose -f compose.yaml -f compose.public.yaml config --quiet
+sudo docker compose -f compose.yaml -f compose.public.yaml up -d --build --wait voice
+sudo docker compose -f compose.yaml -f compose.public.yaml up -d --no-deps --no-build --force-recreate --wait nginx
+sudo docker compose -f compose.yaml -f compose.public.yaml exec -T nginx nginx -t
+sudo docker compose -f compose.yaml -f compose.public.yaml ps
 ```
+
+**기본 로컬/SSH 터널 배포 (`compose.yaml`만 사용):**
+
+```sh
+sudo docker compose config --quiet
+sudo docker compose up -d --build --wait voice
+sudo docker compose up -d --no-deps --no-build --force-recreate --wait nginx
+sudo docker compose exec -T nginx nginx -t
+sudo docker compose ps
+```
+
+기존 DB·인증·RAG가 실행 중인 서버에서는 위 작업으로 음성 서비스와 Nginx를 반영한다. 새 DB 테이블이나 추가 호스트 포트·보안 그룹 규칙은 필요하지 않다. 로그는 같은 Compose 파일 옵션을 사용해 `logs --tail=100 voice nginx`로 확인한다. `http://127.0.0.1:8080/api/voice/health` 또는 공개 HTTPS 주소의 `/api/voice/health`에서 프로세스 상태를 확인할 수 있다. 실제 인식과 음성 생성 성공 여부는 `/chat`에서 별도로 확인한다.
 
 `/chat`에서 기능을 이용한다. 마이크 입력은 HTTPS 또는 localhost의 지원 브라우저가 필요하다. 일반 HTTP의 서버 IP에서는 텍스트 입력을 사용할 수 있다.
 

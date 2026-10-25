@@ -19,6 +19,7 @@
   <symbol id="book-icon" viewBox="0 0 24 24"><path d="M12 5C9 3 5 3 2 4v15c3-1 7-1 10 1 3-2 7-2 10-1V4c-3-1-7-1-10 1Zm0 0v15"/></symbol>
   <symbol id="logout-icon" viewBox="0 0 24 24"><path d="M9 4H4v16h5m5-13 5 5-5 5M8 12h11"/></symbol>
   <symbol id="mic-icon" viewBox="0 0 24 24"><rect x="9" y="2" width="6" height="13" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2m-7 9v3m-4 0h8"/></symbol>
+  <symbol id="speaker-icon" viewBox="0 0 24 24"><path d="m11 4-6 5H2v6h3l6 5V4Zm4 4a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14"/></symbol>
 </defs></svg>
 
 <div id="app" v-cloak>
@@ -88,20 +89,26 @@
             <div v-if="healthError" class="notice error-notice" role="alert">{{ healthError }} <button class="text-button" @click="loadHealth" :disabled="loadingHealth">다시 확인</button></div>
 
             <template v-if="page === 'chat'">
+              <aside class="voice-guide" aria-labelledby="voice-guide-title">
+                <span class="voice-guide-icon" aria-hidden="true"><svg class="icon"><use href="#mic-icon"/></svg></span>
+                <div><h2 id="voice-guide-title">말로 질문하고, 답변은 음성으로 들어보세요.</h2><p>선택한 분야의 등록 자료에서 근거를 찾아드려요. 인식한 질문은 검색 전에 수정할 수 있어요.</p>
+                  <ol aria-label="음성 상담 순서"><li>말로 질문</li><li>인식한 문장 확인</li><li>답변·출처 확인</li><li>답변 듣기</li></ol>
+                </div>
+              </aside>
               <div v-if="health && !sourceReady" class="notice"><strong>{{ sourceLabel }} 자료를 준비하고 있어요.</strong><p>{{ source === 'web' ? '사업공고 자료가 등록되면 신청 조건과 기간을 상담할 수 있어요.' : '자료 관리에서 자료를 등록하거나 운영 담당자에게 적재를 요청하세요.' }}</p><a href="/documents">자료 상태 확인하기</a><button class="text-button" @click="loadHealth" :disabled="loadingHealth">새로고침</button></div>
               <form class="question-card" @submit.prevent="ask">
                 <div class="card-label"><span class="small-mark" aria-hidden="true">AI</span><label for="question">{{ sourceLabel }} 질문</label><span class="context-chip">기업 정보 반영</span></div>
-                <textarea id="question" v-model="question" maxlength="4000" rows="4" :disabled="busy || voiceBusy" :placeholder="source === 'pdf' ? '예: 상시근로자 3명인 회사에서 연차휴가는 어떻게 적용되나요?' : '예: 청년을 채용할 때 확인할 수 있는 지원사업이 있나요?'" required></textarea>
                 <div class="voice-input">
-                  <button v-if="!voiceBusy" class="button secondary" type="button" :disabled="busy || !sourceReady || !voiceSupported" @click="startRecording"><svg class="icon"><use href="#mic-icon"/></svg>음성으로 질문</button>
-                  <button v-if="voice.recordingState === 'recording'" class="button recording-button" type="button" @click="stopRecording"><span aria-hidden="true">■</span>녹음 완료 · {{ voice.recordingSeconds }}초</button>
+                  <button v-if="!voiceBusy" class="button voice-start" type="button" aria-describedby="voice-input-help" :disabled="busy || !sourceReady || !voiceSupported" @click="startRecording"><svg class="icon"><use href="#mic-icon"/></svg>음성으로 질문</button>
+                  <button v-if="voice.recordingState === 'recording'" class="button recording-button" type="button" aria-describedby="voice-input-help" @click="stopRecording"><span aria-hidden="true">■</span>녹음 완료 · {{ voice.recordingSeconds }}초</button>
                   <span v-if="voice.recordingState === 'requesting' || voice.recordingState === 'transcribing'" class="voice-progress"><span class="spinner" aria-hidden="true"></span>{{ voice.recordingState === 'requesting' ? '마이크 확인 중…' : '음성 인식 중…' }}</span>
                   <button v-if="voiceBusy" class="text-button" type="button" @click="cancelRecording">취소</button>
-                  <span class="muted">최대 60초 · 인식한 질문을 확인한 후 검색해요.</span>
+                  <span id="voice-input-help" class="muted">마이크를 눌러 시작하세요. 최대 60초까지 녹음할 수 있어요.</span>
                 </div>
                 <p v-if="!voiceSupported" class="voice-note">음성 입력은 HTTPS 또는 localhost에서 지원되는 브라우저로 이용해 주세요. 텍스트 질문은 계속 사용할 수 있어요.</p>
                 <p v-if="voice.voiceMessage" class="voice-note" role="status">{{ voice.voiceMessage }}</p>
                 <p v-if="voice.voiceError" class="error" role="alert">{{ voice.voiceError }}</p>
+                <textarea id="question" v-model="question" maxlength="4000" rows="4" :disabled="busy || voiceBusy" :placeholder="source === 'pdf' ? '예: 상시근로자 3명인 회사에서 연차휴가는 어떻게 적용되나요?' : '예: 청년을 채용할 때 확인할 수 있는 지원사업이 있나요?'" required></textarea>
                 <div class="question-footer"><span>{{ question.length }} / 4,000 <span class="privacy-note">· 직원 실명·연락처는 입력하지 마세요.</span></span><button class="button primary" :disabled="!canAsk" type="submit">{{ busy ? '근거를 찾고 있어요…' : '답변 받기' }}<svg v-if="!busy" class="icon"><use href="#arrow-icon"/></svg></button></div>
               </form>
               <p v-if="error" class="error" role="alert">{{ error }}</p>
@@ -109,7 +116,7 @@
               <template v-else-if="answer">
                 <section class="answer-card" aria-live="polite"><div class="answer-heading"><span class="eyebrow">AI 상담 답변</span><span class="status-tag" :class="answer.needs_review ? 'warning' : ''">{{ answer.needs_review ? '전문가 확인 권장' : '근거 원문 확인' }}</span></div><h2>{{ submittedQuestion }}</h2><p class="answer-text">{{ answer.response }}</p><div v-if="answer.persona_applied" class="applied-note">적용된 기업 정보: {{ personaText(answer.persona_applied) }}</div><div v-if="answer.needs_review" class="review-note"><strong>개별 사안은 전문가와 확인하세요.</strong><p>{{ reviewText(answer.review_reason) }}</p></div>
                   <div class="answer-speech">
-                    <button v-if="!voice.audioUrl" class="button secondary" type="button" :disabled="voiceBusy || voice.speechLoading || !spokenAnswer.trim() || spokenAnswer.length > 4096" @click="listen">{{ voice.speechLoading ? '답변 음성을 만들고 있어요…' : '답변 듣기' }}</button>
+                    <button v-if="!voice.audioUrl" class="button secondary" type="button" :disabled="voiceBusy || voice.speechLoading || !spokenAnswer.trim() || spokenAnswer.length > 4096" @click="listen"><svg v-if="!voice.speechLoading" class="icon" aria-hidden="true"><use href="#speaker-icon"/></svg><span v-else class="spinner" aria-hidden="true"></span>{{ voice.speechLoading ? '답변 음성을 만들고 있어요…' : '답변 듣기' }}</button>
                     <audio v-if="voice.audioUrl" ref="answerAudio" :src="voice.audioUrl" controls preload="metadata" aria-label="AI 상담 답변 음성"></audio>
                     <p class="voice-note">{{ spokenAnswer.length > 4096 ? '답변이 길어 음성 재생을 지원하지 않아요. 텍스트로 확인해 주세요.' : 'AI가 생성한 음성이에요. 출처는 아래에서 확인해 주세요.' }}</p>
                     <p v-if="voice.speechError" class="error" role="alert">{{ voice.speechError }}</p>

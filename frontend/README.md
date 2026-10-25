@@ -34,7 +34,7 @@ git pull --ff-only origin feat-devops
 sudo docker compose up -d --no-deps --no-build --force-recreate nginx auth
 ```
 
-백엔드 코드 변경이 없는 이번 UI 작업은 EC2에서 이미지를 다시 빌드할 필요가 없다. 전체 첫 실행은 루트 배포 문서를 따른다. SSH 터널의 기존 주소에서 `/signup`, `/login`, `/chat`, `/documents`에 접속한다.
+프론트 파일만 바꾸는 작업은 EC2에서 이미지를 다시 빌드할 필요가 없다. **음성 검색을 처음 추가하는 배포는 `voice` 이미지 빌드·실행과 Nginx 반영이 함께 필요**하므로 [음성 검색 배포 안내](../docs/VOICE_SEARCH.md#실행)를 따른다. HTTPS 배포는 `compose.public.yaml` 옵션을 유지한다. 전체 첫 실행은 루트 배포 문서를 따른다. SSH 터널의 기존 주소에서 `/signup`, `/login`, `/chat`, `/documents`에 접속한다.
 
 ## 검증
 

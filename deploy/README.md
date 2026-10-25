@@ -1,6 +1,6 @@
 # EC2 배포 및 운영
 
-단일 EC2에서 Nginx, Java 인증 서버, FastAPI RAG, PostgreSQL 17 + pgvector를 Docker Compose로 실행한다. S3와 음성 서비스는 이번 구성에 포함하지 않는다. 인증 서버는 현재 JDK HttpServer이며 Spring Boot로 바꾸지 않았다.
+단일 EC2에서 Nginx, Java 인증 서버, FastAPI RAG, PostgreSQL 17 + pgvector를 Docker Compose로 실행한다. 음성 검색 브랜치는 별도 FastAPI 음성 서비스와 `/chat`의 음성 입력·답변 듣기를 포함한다. [음성 서비스 실행·검증 안내](../docs/VOICE_SEARCH.md)를 참고한다. S3는 이번 구성에 포함하지 않는다. 인증 서버는 현재 JDK HttpServer이며 Spring Boot로 바꾸지 않았다.
 
 ## 배포 안내
 
@@ -121,7 +121,7 @@ sudo docker compose config --quiet
 sudo docker compose config --services
 ```
 
-서비스 목록에는 `db`, `nginx`, `auth`, `rag`가 있어야 한다. 두 개만 보이면 GitHub에 최신 통합 코드가 올라왔는지 확인한다.
+서비스 목록에는 `db`, `nginx`, `auth`, `rag`가 있어야 한다. 음성 검색 변경사항을 포함한 버전에는 `voice`도 표시된다. 두 개만 보이면 GitHub에 최신 통합 코드가 올라왔는지 확인한다.
 
 ### 6. EC2에서 전체 서비스 실행
 
@@ -206,6 +206,12 @@ curl -i --max-time 10 http://127.0.0.1:8080/api/rag/health
 ```
 
 Nginx 설정 파일은 `git pull`만으로 다시 로드되지 않는다. 위 Nginx 재생성으로 새 설정을 반영한다. 브라우저에 이전 화면이 보이면 Mac에서 새로고침한다.
+
+### 음성 검색 기능을 기존 서버에 추가할 때
+
+`voice-ai_code`의 STT·TTS API는 기존 EC2에서 별도 `voice` 컨테이너로 실행한다. STT는 로컬 Whisper, TTS는 OpenAI API를 사용한다. Compose의 `voice` 서비스·모델 캐시 볼륨, Nginx의 `/api/voice/` 프록시, `/chat`의 프론트 변경사항이 함께 필요하다. 기존 `.env`의 `JWT_SECRET`과 `OPENAI_API_KEY`를 재사용한다.
+
+이 경우 프론트만 반영하는 명령으로는 부족하다. `voice`를 빌드·실행하고 Nginx를 재생성해야 한다. HTTPS 공개 배포는 반드시 `-f compose.yaml -f compose.public.yaml`을 유지한다. [배포 유형별 실행 명령·모델 준비·검증 절차](../docs/VOICE_SEARCH.md#실행)를 따른다. 별도 EC2, DB 변경, 8008 포트 공개는 필요하지 않다.
 
 ## 다시 켜기와 중지
 
