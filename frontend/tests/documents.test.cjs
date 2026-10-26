@@ -4,16 +4,18 @@ const vm = require('node:vm');
 const fs = require('node:fs');
 const path = require('node:path');
 
-function setup() {
+function setup({ stubDocuments = true, confirm = () => true } = {}) {
   let options;
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../assets/app.js'), 'utf8'), {
-    location: { pathname: '/documents', search: '' }, URLSearchParams, FormData,
+    window: { confirm },
+    location: { pathname: '/admin', search: '' }, URLSearchParams, FormData,
     VoiceChat: { supported: () => false }, Vue: { createApp: value => { options = value; return { mount() {} }; } },
   });
   const app = options.data();
   app.$refs = {};
   for (const [key, fn] of Object.entries(options.methods)) app[key] = fn.bind(app);
   app.loadHealth = async () => {};
+  if (stubDocuments) app.loadDocuments = async () => {};
   return app;
 }
 const pdf = name => new File(['%PDF-test'], name, { type: 'application/pdf' });
@@ -52,4 +54,37 @@ test('law uploads keep subcategory and show duplicate exclusion', async () => {
   assert.equal(app.selectedFiles[0].status, '중복 제외');
   app.selectSource('web');
   assert.equal(app.selectedFiles.length, 0);
+});
+
+
+test('admin deletion requires confirmation and preserves collection scope', async () => {
+  const app = setup({ confirm: () => false });
+  assert.equal(app.page, 'documents');
+  let calls = 0;
+  app.api = async () => { calls++; };
+  await app.deleteDocument({ title: '예시법', key: 'file:법령.pdf', chunks: 2 });
+  assert.equal(calls, 0);
+  const confirmed = setup(); confirmed.source = 'web';
+  confirmed.api = async (url, options) => {
+    const query = new URL(url, 'http://localhost').searchParams;
+    assert.equal(options.method, 'DELETE');
+    assert.equal(query.get('source'), 'web');
+    assert.equal(query.get('key'), 'notice:공고&1');
+    return { deleted_chunks: 3 };
+  };
+  await confirmed.deleteDocument({ title: '사업공고', key: 'notice:공고&1', chunks: 3 });
+  assert.match(confirmed.documentNotice, /3개/);
+  assert.equal(confirmed.busy, false);
+});
+
+test('switching fields ignores a late document list response', async () => {
+  const app = setup({ stubDocuments: false });
+  let resolveLaw;
+  app.api = url => url.endsWith('pdf') ? new Promise(resolve => { resolveLaw = resolve; }) : Promise.resolve({ items: [{ key: 'notice:one' }] });
+  const old = app.loadDocuments();
+  app.source = 'web';
+  await app.loadDocuments();
+  resolveLaw({ items: [{ key: 'file:old.pdf' }] });
+  await old;
+  assert.equal(app.documents[0].key, 'notice:one');
 });

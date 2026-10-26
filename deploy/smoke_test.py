@@ -49,7 +49,7 @@ def main():
         assert request("/healthz") == "ok\n"
         assert "<html" in request("/").lower()
         assert "Vue" in request("/external_index.html")
-        for path in ("/login", "/signup", "/chat", "/documents"):
+        for path in ("/login", "/signup", "/chat", "/admin"):
             assert 'id="app"' in request(path)
         assert "createApp" in request("/assets/app.js")
         assert "Vue" in request("/assets/vendor/vue.global.prod.js")

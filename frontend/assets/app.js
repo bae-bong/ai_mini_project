@@ -1,6 +1,6 @@
-/* Four server routes share this Vue app; API tokens stay in HttpOnly cookies. */
+/* Server routes share this Vue app; API tokens stay in HttpOnly cookies. */
 (() => {
-  const page = { '/login': 'login', '/signup': 'signup', '/chat': 'chat', '/documents': 'documents' }[location.pathname] || 'chat';
+  const page = { '/login': 'login', '/signup': 'signup', '/chat': 'chat', '/admin': 'documents' }[location.pathname] || 'chat';
   const { createApp } = Vue;
   createApp({
     data: () => ({
@@ -8,6 +8,8 @@
       healthError: '', loadingHealth: false, source: 'pdf', question: '',
       submittedQuestion: '', answer: null, selectedFiles: [], category: '노무',
       uploadResult: null, managed: false,
+      documents: [], documentsLoading: false, documentsError: '', documentNotice: '', documentRequest: 0,
+      selectedDocument: null, previewChunks: [],
       voiceSupported: VoiceChat.supported(),
       voice: { recordingState: 'idle', recordingSeconds: 0, voiceMessage: '', voiceError: '', speechLoading: false, speechError: '', audioUrl: '' },
       account: { username: '', password: '', confirm: '', employees: 0, types: [] },
@@ -48,6 +50,7 @@
         if (/username already exists/.test(detail)) return '이미 사용 중인 아이디예요. 다른 아이디를 입력해 주세요.';
         if (status === 413) return '파일 용량이 너무 커요. 20MB 이하의 파일을 선택해 주세요.';
         if (status === 409) return '운영 담당자가 관리하는 자료예요. 담당자에게 자료 변경을 요청해 주세요.';
+        if (status === 404) return '자료를 찾을 수 없어요. 목록을 새로고침해 주세요.';
         if (status >= 500) return '요청을 처리하지 못했어요. 잠시 후 다시 시도해 주세요.';
         if (/employees/.test(detail)) return '상시근로자 수를 0 이상의 정수로 입력해 주세요.';
         if (status === 422) return '파일에서 텍스트를 읽을 수 없어요. 텍스트가 포함된 PDF를 선택해 주세요.';
@@ -70,6 +73,7 @@
           this.user.persona.company_types ||= [];
           if (this.isAuthPage) { location.replace('/chat'); return; }
           await this.loadHealth();
+          if (this.page === 'documents') await this.loadDocuments();
         } catch (error) { if (!this.isAuthPage) this.error = error.message; }
         finally { this.checking = false; }
       },
@@ -119,6 +123,11 @@
         this.error = '';
         this.answer = null;
         this.question = '';
+        this.documents = [];
+        this.selectedDocument = null;
+        this.previewChunks = [];
+        this.documentNotice = '';
+        if (this.page === 'documents') this.loadDocuments();
       },
       onTabKey(event, current) {
         if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
@@ -168,6 +177,44 @@
       },
       reviewText(reason) { return reason || '적용 조건·예외를 원문에서 확인하고, 개별 사안의 법적 판단은 노무사 등 전문가에게 확인해 주세요.'; },
       fileSize(size) { return `${(size / 1024 / 1024).toFixed(1)}MB`; },
+      displayFile(value) { const name = (value || '').split('/').pop(); return name === '_meta' ? '공고 개요' : name || '파일 정보 없음'; },
+      async loadDocuments() {
+        const source = this.source, request = ++this.documentRequest;
+        this.documentsLoading = true;
+        this.documentsError = '';
+        try {
+          const result = await this.api(`/api/rag/documents?source=${source}`);
+          if (request === this.documentRequest) this.documents = result.items;
+        } catch (error) { if (request === this.documentRequest) this.documentsError = error.message; }
+        finally { if (request === this.documentRequest) this.documentsLoading = false; }
+      },
+      async previewDocument(item) {
+        if (this.busy) return;
+        this.busy = true;
+        this.documentsError = '';
+        this.selectedDocument = item;
+        this.previewChunks = [];
+        try {
+          const query = new URLSearchParams({ source: this.source, key: item.key });
+          this.previewChunks = (await this.api(`/api/rag/documents/preview?${query}`)).chunks;
+        } catch (error) { this.documentsError = error.message; }
+        finally { this.busy = false; }
+      },
+      async deleteDocument(item) {
+        if (this.busy || !window.confirm(`“${item.title}” 자료를 삭제할까요?\n저장된 ${item.chunks}개 청크가 삭제되고 모든 사용자의 검색에서 제외됩니다. 사업공고는 개요와 첨부를 함께 삭제합니다. 복구하려면 재등록해야 합니다.`)) return;
+        this.busy = true;
+        this.documentsError = '';
+        this.documentNotice = '';
+        try {
+          const query = new URLSearchParams({ source: this.source, key: item.key });
+          const result = await this.api(`/api/rag/documents?${query}`, { method: 'DELETE' });
+          this.documentNotice = `${result.deleted_chunks}개 청크를 삭제했어요.`;
+          this.selectedDocument = null;
+          this.previewChunks = [];
+          await Promise.all([this.loadDocuments(), this.loadHealth()]);
+        } catch (error) { this.documentsError = error.message; }
+        finally { this.busy = false; }
+      },
       chooseFile(event) {
         this.addFiles(event.target.files);
         event.target.value = '';
@@ -213,6 +260,7 @@
           }
           this.uploadResult = { message: '파일별 처리 결과를 확인해 주세요. 실패한 파일은 다시 등록할 수 있어요.' };
           await this.loadHealth();
+          await this.loadDocuments();
         } finally { this.busy = false; }
       },
     },

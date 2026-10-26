@@ -5,10 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#123f3c">
   <title>경영지원 AI</title>
-  <link rel="stylesheet" href="/assets/styles.css?v=cc435932fdbf">
+  <link rel="stylesheet" href="/assets/styles.css?v=7bee80c68616">
   <script defer src="/assets/vendor/vue.global.prod.js"></script>
   <script defer src="/assets/voice.js?v=76a5ad9563a1"></script>
-  <script defer src="/assets/app.js?v=2174e7e4c54a"></script>
+  <script defer src="/assets/app.js?v=f7c014909408"></script>
 </head>
 <body>
 <svg class="icon-library" aria-hidden="true"><defs>
@@ -73,7 +73,6 @@
         <span class="nav-caption">워크스페이스</span>
         <nav aria-label="주 메뉴">
           <a href="/chat" :class="{active: page === 'chat'}" :aria-current="page === 'chat' ? 'page' : undefined"><svg class="icon"><use href="#chat-icon"/></svg>AI 상담</a>
-          <a href="/documents" :class="{active: page === 'documents'}" :aria-current="page === 'documents' ? 'page' : undefined"><svg class="icon"><use href="#folder-icon"/></svg>자료 관리</a>
         </nav>
         <section class="company-card" aria-label="현재 기업 정보"><span class="nav-caption">상담에 반영하는 기업 정보</span><strong>{{ user.username }}</strong><p>상시근로자 <b>{{ employeeLabel }}</b></p><div class="tags"><span v-for="type in user.persona.company_types" :key="type">{{ type }}</span><span v-if="!user.persona.company_types.length">기업 유형 미등록</span></div></section>
         <button class="logout" @click="logout" :disabled="busy"><svg class="icon"><use href="#logout-icon"/></svg>로그아웃</button>
@@ -95,7 +94,7 @@
                   <ol aria-label="음성 상담 순서"><li>말로 질문</li><li>인식한 문장 확인</li><li>답변·출처 확인</li><li>답변 듣기</li></ol>
                 </div>
               </aside>
-              <div v-if="health && !sourceReady" class="notice"><strong>{{ sourceLabel }} 자료를 준비하고 있어요.</strong><p>{{ source === 'web' ? '사업공고 자료가 등록되면 신청 조건과 기간을 상담할 수 있어요.' : '자료 관리에서 자료를 등록하거나 운영 담당자에게 적재를 요청하세요.' }}</p><a href="/documents">자료 상태 확인하기</a><button class="text-button" @click="loadHealth" :disabled="loadingHealth">새로고침</button></div>
+              <div v-if="health && !sourceReady" class="notice"><strong>{{ sourceLabel }} 자료를 준비하고 있어요.</strong><p>{{ source === 'web' ? '사업공고 자료가 등록되면 신청 조건과 기간을 상담할 수 있어요.' : '운영 담당자에게 자료 적재를 요청하세요.' }}</p><button class="text-button" @click="loadHealth" :disabled="loadingHealth">새로고침</button></div>
               <form class="question-card" @submit.prevent="ask">
                 <div class="card-label"><span class="small-mark" aria-hidden="true">AI</span><label for="question">{{ sourceLabel }} 질문</label><span class="context-chip">기업 정보 반영</span></div>
                 <div class="voice-input">
@@ -129,6 +128,16 @@
 
             <template v-else>
               <div class="status-card"><div class="status-symbol" aria-hidden="true"><svg class="icon"><use :href="source === 'pdf' ? '#book-icon' : '#folder-icon'"/></svg></div><div><span class="eyebrow">{{ sourceLabel }} 자료</span><h2>{{ loadingHealth ? '준비 상태 확인 중' : sourceReady ? '상담에 사용할 자료가 있어요' : health ? '아직 등록된 자료가 없어요' : '자료 상태를 확인해 주세요' }}</h2><p class="subtext">{{ sourceReady ? '등록된 자료를 바탕으로 AI 상담을 시작할 수 있어요.' : '자료가 준비되면 이 분야의 상담을 시작할 수 있어요.' }}</p></div><button class="button secondary" @click="loadHealth" :disabled="loadingHealth">{{ loadingHealth ? '확인 중…' : '상태 새로고침' }}</button></div>
+              <section class="upload-card document-library" aria-labelledby="document-list-title">
+                <div class="section-title"><h2 id="document-list-title">저장된 {{ sourceLabel }} 자료 <span>{{ documents.length }}개</span></h2><button class="button secondary" type="button" :disabled="busy || documentsLoading" @click="loadDocuments">목록 새로고침</button></div>
+                <p class="subtext">등록된 문서와 검색용 본문을 확인하고 삭제할 수 있어요. 사업공고는 개요와 첨부를 하나로 묶어서 표시해요.</p>
+                <p v-if="documentsLoading" role="status">자료 목록을 불러오고 있어요…</p>
+                <p v-if="documentsError" class="error" role="alert">{{ documentsError }}</p>
+                <p v-if="documentNotice" class="success-note" role="status">{{ documentNotice }}</p>
+                <p v-if="!documentsLoading && !documentsError && !documents.length" class="notice">이 분야에 등록된 자료가 없어요.</p>
+                <ul class="saved-documents" aria-label="저장된 문서"><li v-for="item in documents" :key="item.key"><div class="document-summary"><h3>{{ item.title }}</h3><p class="muted">검색 문단 {{ item.chunks }}개</p><p v-for="file in item.files" :key="file" class="document-filename">{{ displayFile(file) }}</p></div><div class="document-actions"><button class="button secondary" type="button" :disabled="busy" @click="previewDocument(item)" :aria-label="item.title + ' 내용 확인'">내용 확인</button><button class="button danger" type="button" :disabled="busy" @click="deleteDocument(item)" :aria-label="item.title + ' 삭제'">삭제</button></div></li></ul>
+                <section v-if="selectedDocument" class="document-preview" aria-labelledby="preview-title"><div class="section-title"><h3 id="preview-title">{{ selectedDocument.title }} · 내용 미리보기</h3><button class="text-button" type="button" :disabled="busy" @click="selectedDocument = null">닫기</button></div><p class="muted">저장된 검색 문단 중 최대 3개를 각 1,200자까지 표시해요. 원본 PDF 다운로드는 제공하지 않아요.</p><p v-if="busy && !previewChunks.length" role="status">내용을 불러오고 있어요…</p><article v-for="(chunk, index) in previewChunks" :key="index"><strong>{{ displayFile(chunk.source_file) }}<span v-if="chunk.page"> · {{ chunk.page }}페이지</span><span v-if="chunk.article"> · {{ chunk.article }}</span></strong><p>{{ chunk.text }}</p></article></section>
+              </section>
               <section class="upload-card">
                 <div class="section-title"><h2>{{ sourceLabel }} 자료 등록</h2><span class="muted">PDF · 파일당 최대 20MB · 최대 20개</span></div>
                 <p class="subtext">{{ source === 'pdf' ? '법령·조항 자료를 등록하세요. 경영지원 상담에서 사용합니다.' : '지원사업 공고문·사업 문서를 등록하세요. 사업공고 상담에서 사용합니다.' }}</p>
@@ -143,7 +152,7 @@
                   <div class="upload-footer"><span class="muted">선택한 분야에 하나씩 등록해요. 동일 파일은 중복 제외하며, 같은 파일명의 수정본은 교체해요.</span><button class="button primary" type="submit" :disabled="busy || managed || !selectedFiles.some(item => ['대기', '실패'].includes(item.status))">{{ busy ? '순서대로 등록 중…' : '등록 / 실패 파일 재시도' }}</button></div>
                 </form>
               </section>
-              <p class="quiet-note">현재 자료 목록 조회·개별 삭제는 제공하지 않아요. 등록 결과와 자료 준비 상태를 확인할 수 있어요.</p>
+              <p class="quiet-note">삭제한 자료는 모든 사용자의 검색에서 제외돼요. 원본 파일과 일괄 적재 입력은 별도로 보관되므로 재적재하면 다시 등록될 수 있어요.</p>
             </template>
           </section>
           <footer class="workspace-footer">경영지원 AI <span>·</span> 판단을 돕는 근거, 결정은 신중하게.</footer>

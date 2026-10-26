@@ -110,6 +110,36 @@ async def me(current_user: dict = Depends(get_current_user)):
 VECTORSTORE_WEB = PgVectorStore("web")
 VECTORSTORE_PDF = PgVectorStore("pdf")
 
+
+def document_store(source):
+    if source not in {"pdf", "web"}:
+        raise HTTPException(status_code=400, detail="source는 pdf 또는 web이어야 합니다.")
+    return VECTORSTORE_PDF if source == "pdf" else VECTORSTORE_WEB
+
+
+# Temporary /admin workspace uses existing login authentication, not an admin role.
+@app.get("/documents", tags=["자료 관리"])
+def list_documents(source: str = Query(...), current_user: dict = Depends(get_current_user)):
+    return {"items": document_store(source).list_documents()}
+
+
+@app.get("/documents/preview", tags=["자료 관리"])
+def preview_document(source: str = Query(...), key: str = Query(..., min_length=1, max_length=2048),
+                     current_user: dict = Depends(get_current_user)):
+    chunks = document_store(source).preview_document(key)
+    if not chunks:
+        raise HTTPException(status_code=404, detail="자료를 찾을 수 없습니다.")
+    return {"chunks": chunks}
+
+
+@app.delete("/documents", tags=["자료 관리"])
+def delete_document(source: str = Query(...), key: str = Query(..., min_length=1, max_length=2048),
+                    current_user: dict = Depends(get_current_user)):
+    deleted = document_store(source).delete_document(key)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="자료를 찾을 수 없습니다.")
+    return {"deleted_chunks": deleted, "message": "자료를 삭제했습니다."}
+
 # ✅ PDF 텍스트 추출
 def load_paper(file_path: str) -> str:
     reader = PdfReader(file_path)

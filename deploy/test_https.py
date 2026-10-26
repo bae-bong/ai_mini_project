@@ -62,7 +62,7 @@ def main():
             assert "308 Permanent" in redirect and "https://" + DOMAIN + "/login?test=1" in redirect
             assert "challenge-ok" in http("/.well-known/acme-challenge/local-check")
             assert "200 OK" in https("/healthz")
-            for page in ("/login", "/signup", "/chat", "/documents"):
+            for page in ("/login", "/signup", "/chat", "/admin"):
                 assert 'id="app"' in https(page)
             backend = "from http.server import BaseHTTPRequestHandler,HTTPServer\nclass H(BaseHTTPRequestHandler):\n def do_GET(self):\n  self.send_response(200);self.send_header('Set-Cookie','ACCESS_TOKEN=test; Path=/; HttpOnly');self.end_headers();self.wfile.write(b'{}')\nHTTPServer(('0.0.0.0',8080),H).serve_forever()"
             run("docker", "run", "-d", "--name", project + "-auth", "--network", project + "_default",

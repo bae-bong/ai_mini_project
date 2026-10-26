@@ -152,7 +152,7 @@ curl -i --max-time 10 http://127.0.0.1:8080/api/rag/health
 | 회원가입  | http://127.0.0.1:18080/signup    |
 | 로그인    | http://127.0.0.1:18080/login     |
 | AI 상담   | http://127.0.0.1:18080/chat      |
-| 자료 관리 | http://127.0.0.1:18080/documents |
+| 자료 관리 | http://127.0.0.1:18080/admin |
 
 회원가입 → 로그인 → 기업 유형·직원 수 표시를 확인한다. 화면에는 경영지원/사업공고로 표시한다. 실제 질의응답은 관련 자료가 적재된 뒤 검증한다.
 
@@ -485,7 +485,7 @@ sudo docker compose run --rm --no-deps \
 | `/api/auth/check`  | `auth:8080/api/auth/check` |
 | `/api/rag/*`       | `rag:8001/*` (접두사 제거) |
 
-`/login`, `/signup`, `/chat`, `/documents`는 Nginx가 새 정적 Vue 앱으로 제공한다. 기존 인증 서버의 `/static/*`, `/api/login` 등도 계속 전달한다. Java는 `DB_URL`, `DB_USER`, `DB_PASSWORD`, `JWT_SECRET`, `LOGIN_REDIRECT`를 받는다. RAG는 `PGHOST`, `PGDATABASE`, `PGUSER`, `PGPASSWORD`와 동일한 `JWT_SECRET`을 받는다. 로컬 개발에서는 표준 PostgreSQL URI인 `RAG_DATABASE_URL`도 지원한다. DB 주소는 컨테이너 안에서 `localhost` 대신 `db`를 사용한다.
+`/login`, `/signup`, `/chat`, `/admin`는 Nginx가 새 정적 Vue 앱으로 제공한다. 기존 인증 서버의 `/static/*`, `/api/login` 등도 계속 전달한다. Java는 `DB_URL`, `DB_USER`, `DB_PASSWORD`, `JWT_SECRET`, `LOGIN_REDIRECT`를 받는다. RAG는 `PGHOST`, `PGDATABASE`, `PGUSER`, `PGPASSWORD`와 동일한 `JWT_SECRET`을 받는다. 로컬 개발에서는 표준 PostgreSQL URI인 `RAG_DATABASE_URL`도 지원한다. DB 주소는 컨테이너 안에서 `localhost` 대신 `db`를 사용한다.
 
 ## 테스트
 
@@ -521,7 +521,7 @@ sudo docker compose exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_
 
 ## 분야별 자료 등록과 중복 점검
 
-`/documents`에서 경영지원 법령과 사업공고 문서를 각각 등록한다. 복수 PDF는 하나씩 처리하며 동일 파일은 중복 제외한다. 이 변경은 백엔드도 포함하므로 RAG 이미지를 다시 빌드해야 한다. 프론트 정적 파일만 바꾸는 배포와 구분한다.
+`/admin`에서 경영지원 법령과 사업공고 문서를 각각 등록한다. 복수 PDF는 하나씩 처리하며 동일 파일은 중복 제외한다. 이 변경은 백엔드도 포함하므로 RAG 이미지를 다시 빌드해야 한다. 프론트 정적 파일만 바꾸는 배포와 구분한다.
 
 최신 코드 반영 후 HTTPS 구성에서 실행한다.
 
@@ -531,3 +531,5 @@ sudo docker compose -f compose.yaml -f compose.public.yaml up -d --no-deps --no-
 ```
 
 기존 DB의 중복은 자동 삭제하지 않는다. 조회 명령·백업·분류 및 해시 검사 한계는 [분야별 자료 등록과 중복 점검](../docs/DOCUMENT_UPLOADS.md)을 따른다.
+
+관리 화면은 로그인 후 `/admin`을 직접 입력해 접속한다. 왼쪽 메뉴에는 표시하지 않으며 이전 `/documents` 페이지는 제공하지 않는다. 이 경로 변경은 관리자 권한 제한이 아니다. 현재 모든 로그인 사용자가 관리 API에 접근할 수 있으며 역할 분리는 후속 작업이다. 저장 문서 조회·내용 미리보기·확인 후 삭제의 범위는 [자료 관리 안내](../docs/DOCUMENT_UPLOADS.md#관리-화면과-문서-삭제)를 따른다. DB 테이블 변경은 없고, RAG 재빌드와 Nginx 재생성이 필요하다.

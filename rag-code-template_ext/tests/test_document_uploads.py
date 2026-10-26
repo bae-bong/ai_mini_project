@@ -71,6 +71,26 @@ class UploadTests(unittest.TestCase):
         self.assertEqual(len(report["duplicate_candidates"]), 1)
         self.assertEqual(report["duplicate_candidates"][0]["source_files"], ["a.pdf", "copy.pdf"])
 
+    def test_document_management_requires_login_and_valid_scope(self):
+        self.module.app.dependency_overrides.clear()
+        self.assertEqual(self.client.get("/documents?source=pdf").status_code, 401)
+        self.assertEqual(self.client.delete("/documents?source=pdf&key=file:a.pdf").status_code, 401)
+        self.module.app.dependency_overrides[self.module.get_current_user] = lambda: {"id": 1}
+        with patch.object(self.module, "VECTORSTORE_WEB", self.store), \
+             patch.object(self.module, "VECTORSTORE_PDF") as law:
+            self.store.list_documents.return_value = [{"key": "notice:one"}]
+            self.store.preview_document.return_value = [{"text": "공고 본문"}]
+            self.store.delete_document.return_value = 2
+            self.assertEqual(self.client.get("/documents?source=unknown").status_code, 400)
+            self.assertEqual(self.client.get("/documents?source=web").json()["items"][0]["key"], "notice:one")
+            self.assertEqual(self.client.get("/documents/preview?source=web&key=notice:one").status_code, 200)
+            response = self.client.delete("/documents?source=web&key=notice:one")
+            self.assertEqual(response.json()["deleted_chunks"], 2)
+            self.store.delete_document.assert_called_once_with("notice:one")
+            law.delete_document.assert_not_called()
+            self.store.delete_document.return_value = 0
+            self.assertEqual(self.client.delete("/documents?source=web&key=notice:missing").status_code, 404)
+
 
 if __name__ == "__main__":
     unittest.main()

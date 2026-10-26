@@ -92,3 +92,39 @@ class ApiTests(unittest.TestCase):
         with connect() as conn:
             self.assertEqual(conn.execute("SELECT content FROM rag_chunks ORDER BY content").fetchall(),
                              [("body",), ("overview",)])
+
+    def test_document_list_preview_and_delete_keep_other_notices_and_collection(self):
+        web = PgVectorStore("web", model="test-only", embedding_client=TestEmbeddings())
+        law = PgVectorStore("pdf", model="test-only", embedding_client=TestEmbeddings())
+        law.add_documents([Document(page_content="법령", metadata={"source_file": "a.pdf"})], source_file="a.pdf")
+        docs = [Document(page_content="공고 개요", metadata={"chunk_id": "meta", "title": "공고1", "notice_id": "n1", "source_file": "n1/_meta"}),
+                Document(page_content="본문" * 1000, metadata={"chunk_id": "body", "title": "공고1", "notice_id": "n1", "source_file": "n1/a.pdf"}),
+                Document(page_content="다른 공고", metadata={"chunk_id": "other", "notice_id": "n2", "source_file": "n2/a.pdf"})]
+        web.add_documents(docs)
+        listed = {item["key"]: item for item in web.list_documents()}
+        self.assertEqual(listed["notice:n1"]["chunks"], 2)
+        self.assertEqual(set(listed["notice:n1"]["files"]), {"n1/_meta", "n1/a.pdf"})
+        self.assertTrue(all(len(item["text"]) <= 1200 for item in web.preview_document("notice:n1")))
+        self.assertEqual(web.delete_document("notice:n1' OR 1=1 --"), 0)
+        self.assertEqual(web.delete_document("notice:n1"), 2)
+        self.assertEqual(web.delete_document("notice:n1"), 0)
+        self.assertEqual(web.list_documents()[0]["key"], "notice:n2")
+        self.assertEqual(law.info()["vectors"], 1)
+        self.assertEqual(web.info()["vectors"], 1)
+
+    def test_managed_law_deletion_updates_sources_and_orphan_addenda(self):
+        store = PgVectorStore("pdf", model="test-only", embedding_client=TestEmbeddings())
+        docs = [Document(page_content=name, metadata={"source_file": name + ".pdf", "law_id": name}) for name in ["a", "b"]]
+        store.write_vectors(docs, [[0] * 8] * 2,
+                            manifest={"managed_by": "law_pipeline", "chunks_sha256": "old",
+                                      "sources": [{"file": "a.pdf"}, {"file": "b.pdf"}]},
+                            supplements=[{"law_id": "a", "text": "a 부칙"}, {"law_id": "b", "text": "b 부칙"}])
+        self.assertEqual(store.delete_document("file:a.pdf"), 1)
+        info = store.info()
+        self.assertEqual(info["manifest"]["managed_by"], "law_pipeline")
+        self.assertTrue(info["manifest"]["partially_deleted"])
+        self.assertNotIn("chunks_sha256", info["manifest"])
+        self.assertEqual(info["manifest"]["sources"], [{"file": "b.pdf"}])
+        with connect() as conn:
+            self.assertEqual(conn.execute("SELECT supplements FROM rag_collections WHERE name='pdf'").fetchone()[0],
+                             [{"law_id": "b", "text": "b 부칙"}])

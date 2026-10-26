@@ -25,7 +25,7 @@ RAG는 질문과 관련된 자료를 먼저 검색하고, 그 근거를 언어 �
 | 회원가입·로그인 | 계정·상시근로자 수·기업 유형을 등록하고 JWT 쿠키로 인증 |
 | 경영지원 상담 | 법령 PDF에서 관련 조항·부칙을 검색하고 출처를 포함한 답변 생성 |
 | 사업공고 상담 | 적재된 공고에서 관련 내용을 검색하고 기업 유형·접수 상태를 반영 |
-| 자료 관리 | 자료 준비 상태 확인, 일반 법령 PDF 업로드, 관리 자료의 변경 제한 안내 |
+| 자료 관리 | `/admin`에서 분야별 복수 PDF 등록, 저장 문서 조회·미리보기·삭제 |
 | 음성 질문 | 최대 60초 녹음 → 로컬 STT → 문장 확인·수정 → 기존 RAG 검색 |
 | 답변 듣기 | 요청 시 TTS API로 표시된 답변을 음성으로 변환해 재생 |
 | 근거·검토 안내 | 출처, 적용한 기업 정보, 근거 부족·전문가 검토 필요 여부 표시 |
@@ -131,7 +131,7 @@ ai_mini_project/
 | `/signup` | 계정·비밀번호 확인·상시근로자 수·기업 유형 등록 |
 | `/login` | 로그인, 오류·세션 만료 안내 |
 | `/chat` | 분야 선택, 텍스트/음성 질문, 답변·출처·기업 정보, 답변 듣기 |
-| `/documents` | 자료 상태, PDF 등록·결과, 관리 자료 제한 안내 |
+| `/admin` | 주소 직접 입력, 분야별 PDF 복수 등록, 저장 문서 목록·본문 미리보기·확인 후 삭제 |
 
 **핵심 코드:** [템플릿](frontend/index.html), [`app.js`](frontend/assets/app.js)의 `initialize()`, `api()`, `ask()`, `listen()`, [`voice.js`](frontend/assets/voice.js)의 `VoiceChat.create()`.
 
@@ -369,7 +369,10 @@ location /api/voice/ {
 | `GET /api/rag/health` | DB·분야별 자료 존재 여부 | 불필요 |
 | `POST /api/rag/rag-query` | JSON: `prompt`, `source`, `top_k` | JWT |
 | `POST /api/rag/upload-paper` | multipart: `file`, `category` | JWT |
-| `POST /api/rag/upload-notice` | multipart: `meta` JSON 문자열, 선택 PDF `file` | JWT |
+| `POST /api/rag/upload-notice` | multipart: PDF `file` 또는 `meta` JSON 문자열과 선택 PDF | JWT |
+| `GET /api/rag/documents` | `source=pdf|web`, 분야별 저장 문서 목록 | JWT |
+| `GET /api/rag/documents/preview` | `source`, `key`, 저장 본문 미리보기 | JWT |
+| `DELETE /api/rag/documents` | `source`, `key`, 해당 문서와 검색 청크 삭제 | JWT |
 | `POST /api/voice/stt/` | multipart: `audio` → `{ "text": "인식 문장" }` | JWT |
 | `POST /api/voice/tts/` | JSON: `text` → `audio/mpeg` | JWT |
 | `GET /api/voice/health` | 음성 API 프로세스 생존 상태 | 불필요 |
@@ -492,7 +495,7 @@ RAG 평가는 [`eval.sh`](eval.sh)로 실행하며 결과를 `eval/results/`에 
 - 음성 API 12개·브라우저 음성 로직 10개 테스트가 통과했습니다. 브라우저 대역 테스트로 문장 수정 → RAG 연결 → 답변·출처·음성 로드와 실패 시 텍스트 보존을 확인했습니다.
 - 로컬 ARM64 Docker 빌드와 실제 Whisper small의 한국어 샘플 인식을 확인했습니다. 일반 인식 품질·물리 마이크·유료 RAG/TTS 호출·현재 EC2 자원 여유·EC2 음성 재배포는 별도 검증이 필요합니다.
 - 음성 `/health`는 프로세스 상태만 확인합니다. 첫 인식 시 모델을 다운로드·로드하므로 모델 준비와 실제 녹음 테스트가 필요합니다.
-- 공고 등록 API는 있지만 현재 프론트에는 공고 업로드 화면이 없습니다. 자료 목록·개별 삭제·대화 기록·기업 정보 수정·별도 관리자 권한도 아직 제공하지 않습니다.
+- 자료 관리는 왼쪽 메뉴에서 숨기고 로그인 후 `/admin`을 직접 입력해 접속합니다. 경영지원·사업공고 PDF 복수 등록과 저장 문서 조회·미리보기·삭제를 제공합니다. 현재 모든 로그인 사용자가 주소와 API에 접근할 수 있으며, 별도 관리자 역할 검증·대화 기록·기업 정보 수정은 제공하지 않습니다.
 - 현재 프론트는 기능 검증용이며 전면 디자인 개선은 후속 작업입니다.
 
 ## 9. 관련 문서와 후속 작업

@@ -14,6 +14,14 @@ from langchain_core.documents import Document
 
 DEFAULT_MODEL = "text-embedding-ada-002"
 
+# Group notice overview and attachments together; laws retain file-level identity.
+DOCUMENT_KEY_SQL = """CASE
+    WHEN collection='web' AND NULLIF(metadata->>'notice_id', '') IS NOT NULL
+        THEN 'notice:' || (metadata->>'notice_id')
+    WHEN NULLIF(metadata->>'source_file', '') IS NOT NULL
+        THEN 'file:' || (metadata->>'source_file')
+    ELSE 'chunk:' || chunk_id END"""
+
 
 def connect():
     # libpq also accepts PGHOST/PGPORT/PGDATABASE/PGUSER/PGPASSWORD.
@@ -62,6 +70,59 @@ class PgVectorStore:
                 "SELECT metadata->>'source_file' FROM rag_chunks WHERE collection=%s "
                 "AND metadata->>'upload_hash'=%s LIMIT 1", (self.collection, upload_hash)).fetchone()
         return row[0] if row else None
+
+    def list_documents(self):
+        with connect() as conn:
+            rows = conn.execute(f"""
+                SELECT {DOCUMENT_KEY_SQL} AS document_key,
+                       min(COALESCE(NULLIF(metadata->>'law_name',''), NULLIF(metadata->>'title',''),
+                                    metadata->>'source_file', chunk_id)),
+                       count(*), array_remove(array_agg(DISTINCT metadata->>'source_file'), NULL),
+                       max(metadata->>'ingested_at')
+                FROM rag_chunks WHERE collection=%s GROUP BY document_key ORDER BY 2, 1
+                """, (self.collection,)).fetchall()
+        return [dict(key=r[0], title=r[1], chunks=r[2], files=r[3], ingested_at=r[4]) for r in rows]
+
+    def preview_document(self, key):
+        with connect() as conn:
+            rows = conn.execute(f"""
+                SELECT left(content, 1200), metadata->>'source_file', metadata->>'page',
+                       metadata->>'article_no'
+                FROM rag_chunks WHERE collection=%s AND ({DOCUMENT_KEY_SQL})=%s
+                ORDER BY metadata->>'source_file', chunk_id LIMIT 3
+                """, (self.collection, key)).fetchall()
+        return [dict(text=r[0], source_file=r[1], page=r[2], article=r[3]) for r in rows]
+
+    def delete_document(self, key):
+        """Delete one document atomically, using the same lock as uploads/builds."""
+        with connect() as conn:
+            current = conn.execute("SELECT manifest, supplements FROM rag_collections "
+                                   "WHERE name=%s FOR UPDATE", (self.collection,)).fetchone()
+            if not current:
+                return 0
+            deleted = conn.execute(f"DELETE FROM rag_chunks WHERE collection=%s "
+                                   f"AND ({DOCUMENT_KEY_SQL})=%s RETURNING metadata",
+                                   (self.collection, key)).fetchall()
+            if not deleted:
+                return 0
+            manifest, supplements = current
+            count = conn.execute("SELECT count(*) FROM rag_chunks WHERE collection=%s",
+                                 (self.collection,)).fetchone()[0]
+            law_ids = {row[0].get("law_id") for row in deleted} - {None}
+            remaining_ids = {row[0] for row in conn.execute(
+                "SELECT DISTINCT metadata->>'law_id' FROM rag_chunks WHERE collection=%s",
+                (self.collection,)).fetchall()}
+            supplements = [item for item in supplements if item.get("law_id") not in law_ids - remaining_ids]
+            if manifest.get("managed_by") == "law_pipeline":
+                removed_files = {row[0].get("source_file") for row in deleted}
+                manifest["sources"] = [item for item in manifest.get("sources", [])
+                                       if item.get("file") not in removed_files]
+                manifest.pop("chunks_sha256", None)
+                manifest["partially_deleted"] = True
+            manifest["vectors"] = count
+            conn.execute("UPDATE rag_collections SET manifest=%s, supplements=%s WHERE name=%s",
+                         (Jsonb(manifest), Jsonb(supplements), self.collection))
+        return len(deleted)
 
     def add_documents(self, docs, *, source_file=None, source_files=None):
         info = self.info()
