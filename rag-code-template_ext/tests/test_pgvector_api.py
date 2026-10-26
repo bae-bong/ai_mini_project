@@ -75,3 +75,20 @@ class ApiTests(unittest.TestCase):
         wrong = PgVectorStore("web", model="different", embedding_client=TestEmbeddings())
         with self.assertRaises(ValueError):
             wrong.similarity_search("one")
+
+    def test_upload_hash_skips_renamed_files_and_notice_write_rolls_back_together(self):
+        store = PgVectorStore("web", model="test-only", embedding_client=TestEmbeddings())
+        docs = [Document(page_content="overview", metadata={"chunk_id": "meta", "source_file": "n/_meta", "upload_hash": "hash1"}),
+                Document(page_content="body", metadata={"chunk_id": "body", "source_file": "n/a.pdf", "upload_hash": "hash1"})]
+        store.add_documents(docs, source_files=["n/_meta", "n/a.pdf"])
+        self.assertTrue(store.add_documents(docs, source_files=["n/_meta", "n/copy.pdf"])["skipped"])
+        # Recheck under the collection lock also covers concurrent upload races.
+        self.assertTrue(store.write_vectors(docs, [[0] * 8] * 2, mode="upload")["skipped"])
+        broken = [Document(page_content="new", metadata={"chunk_id": "new", "source_file": "n/_meta"}),
+                  Document(page_content="bad", metadata={"chunk_id": "bad", "source_file": "n/a.pdf", "bad": "\x00"})]
+        with self.assertRaises(Exception):
+            store.add_documents(broken, source_files=["n/_meta", "n/a.pdf"])
+        self.assertEqual(store.info()["vectors"], 2)
+        with connect() as conn:
+            self.assertEqual(conn.execute("SELECT content FROM rag_chunks ORDER BY content").fetchall(),
+                             [("body",), ("overview",)])

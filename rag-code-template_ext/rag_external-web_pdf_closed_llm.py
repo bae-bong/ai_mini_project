@@ -43,6 +43,8 @@ import re
 import json
 import asyncio
 import tempfile
+import hashlib
+import unicodedata
 from datetime import datetime, UTC
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
@@ -201,20 +203,37 @@ async def upload_topic(
         raise HTTPException(status_code=500, detail=str(e))
 
 # ✅ PDF 업로드 및 벡터화
+async def read_uploaded_pdf(file):
+    filename = unicodedata.normalize("NFC", (file.filename or "").replace("\\", "/").rsplit("/", 1)[-1])
+    if not filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="PDF 파일만 허용됩니다.")
+    data = await file.read(20 * 1024 * 1024 + 1)
+    if len(data) > 20 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="파일당 20MB 이하만 허용됩니다.")
+    if not data or not data.startswith(b"%PDF-"):
+        raise HTTPException(status_code=400, detail="유효한 PDF 파일을 선택하세요.")
+    file.filename = filename
+    return data
+
+
 @app.post("/upload-paper", summary="법령 PDF 업로드 및 벡터화 (조 단위)", tags=["PDF 처리"])
 async def upload_pdf(
     file: UploadFile = File(...),
     category: str = Form("노무", description="노무 | 우대기업"),
     current_user: dict = Depends(get_current_user),
 ):
-    if not file.filename or not file.filename.lower().endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="PDF 파일만 허용됩니다.")
+    if category not in {"노무", "우대기업"}:
+        raise HTTPException(status_code=400, detail="지원하지 않는 법령 분류입니다.")
     info = VECTORSTORE_PDF.info()
     if info and info["manifest"].get("managed_by") == "law_pipeline":
         raise HTTPException(status_code=409, detail="법령 컬렉션은 law_pipeline build로 관리됩니다.")
     try:
+        data = await read_uploaded_pdf(file)
+        upload_hash = hashlib.sha256(data).hexdigest()
+        if VECTORSTORE_PDF.duplicate_upload(upload_hash):
+            return {"skipped": True, "message": "이미 등록된 동일 자료입니다."}
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-            tmp.write(await file.read())
+            tmp.write(data)
             tmp_path = tmp.name
         try:
             if not load_paper(tmp_path).strip():
@@ -229,7 +248,11 @@ async def upload_pdf(
         # [Q01 개선] 고정 500자 → 조 단위 청킹(최대 1,000자, 중첩 150) + '법령명 조문(제목)' 머리글
         docs = [Document(page_content=c["page_content"], metadata=c["metadata"]) for c in chunks]
 
-        VECTORSTORE_PDF.add_documents(docs, source_file=file.filename)
+        for doc in docs:
+            doc.metadata["upload_hash"] = upload_hash
+        result = VECTORSTORE_PDF.add_documents(docs, source_file=file.filename)
+        if result.get("skipped"):
+            return result
 
         return {
             "message": f"{len(docs)}개 조문 청크 적재 완료",
@@ -244,7 +267,7 @@ async def upload_pdf(
 
 @app.post("/upload-notice", summary="지원사업 공고(meta JSON + 첨부 PDF) 적재·덮어쓰기", tags=["공고"])
 async def upload_notice(
-    meta: str = Form(..., description="tools/make_notice_meta.py 가 만든 공고 meta JSON 문자열"),
+    meta: Optional[str] = Form(None, description="공고 메타 JSON. 생략 시 PDF 파일명으로 기본 공고를 생성합니다."),
     file: Optional[UploadFile] = File(None, description="공고 첨부 PDF (선택)"),
     current_user: dict = Depends(get_current_user),
 ):
@@ -252,7 +275,7 @@ async def upload_notice(
     - 개요(meta) 청크: source_file = '{notice_id}/_meta'
     - 첨부 PDF 청크: source_file = '{notice_id}/{파일명}'"""
     try:
-        meta_obj = json.loads(meta)
+        meta_obj = json.loads(meta) if meta else {}
         if not isinstance(meta_obj, dict):
             raise ValueError
     except ValueError:
@@ -262,9 +285,20 @@ async def upload_notice(
 
     tmp_path = None
     try:
+        data = await read_uploaded_pdf(file) if file is not None and file.filename else None
+        if not meta:
+            if data is None:
+                raise HTTPException(status_code=400, detail="공고 PDF 또는 메타 정보가 필요합니다.")
+            # Stable filename identity replaces a revised upload; hash also detects renamed duplicates.
+            meta_obj = {"notice_id": "upload-" + hashlib.sha256(file.filename.encode()).hexdigest()[:32],
+                        "title": file.filename[:-4]}
+        upload_hash = hashlib.sha256((data or b"") + (json.dumps(meta_obj, sort_keys=True,
+                        ensure_ascii=False).encode() if meta else b"")).hexdigest()
+        if VECTORSTORE_WEB.duplicate_upload(upload_hash):
+            return {"skipped": True, "message": "이미 등록된 동일 자료입니다."}
         if file is not None and file.filename:
             with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-                tmp.write(await file.read())
+                tmp.write(data)
                 tmp_path = tmp.name
         try:
             overview, body = build_notice_chunks(meta_obj, tmp_path, file.filename if tmp_path else None)
@@ -275,11 +309,19 @@ async def upload_notice(
                 os.unlink(tmp_path)
 
         to_docs = lambda cs: [Document(page_content=c["page_content"], metadata=c["metadata"]) for c in cs]
-        VECTORSTORE_WEB.add_documents(to_docs(overview), source_file=overview[0]["metadata"]["source_file"])
+        if not meta and not body:
+            raise HTTPException(status_code=422, detail="PDF에서 텍스트를 추출하지 못했습니다. OCR이 필요합니다.")
+        docs = to_docs(overview + body)
+        for doc in docs:
+            doc.metadata["upload_hash"] = upload_hash
+        keys = [overview[0]["metadata"]["source_file"]]
+        if tmp_path:
+            keys.append(f"{meta_obj['notice_id']}/{file.filename}")
+        result = VECTORSTORE_WEB.add_documents(docs, source_files=keys)
+        if result.get("skipped"):
+            return result
         body_note = None
-        if body:
-            VECTORSTORE_WEB.add_documents(to_docs(body), source_file=body[0]["metadata"]["source_file"])
-        elif tmp_path:
+        if not body and tmp_path:
             body_note = "첨부 PDF에서 텍스트를 추출하지 못해 개요만 적재했습니다 (이미지 PDF면 OCR 필요)."
         m = overview[0]["metadata"]
         return {"message": f"공고 적재 완료: 개요 1개 + 본문 {len(body)}개 청크",

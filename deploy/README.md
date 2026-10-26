@@ -518,3 +518,16 @@ sudo docker compose exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_
 로컬에서 ARM64 이미지를 빌드해 EC2로 전송하는 방법은 [LOCAL_IMAGE_DEPLOY.md](LOCAL_IMAGE_DEPLOY.md)에 보류 항목으로 저장했다. 현재 배포 방식은 EC2 빌드로 유지한다.
 
 변경 이유·영향 파일·검증 결과·남은 작업은 [docs/WORK_LOG.md](../docs/WORK_LOG.md)에 날짜별로 기록한다. 팀의 과거 평가 결과와 검토 문서는 당시 FAISS 결과로 남기고, 이번 변경의 안내는 [PGVECTOR_MIGRATION.md](../rag-code-template_ext/law_pipeline/PGVECTOR_MIGRATION.md)를 따른다.
+
+## 분야별 자료 등록과 중복 점검
+
+`/documents`에서 경영지원 법령과 사업공고 문서를 각각 등록한다. 복수 PDF는 하나씩 처리하며 동일 파일은 중복 제외한다. 이 변경은 백엔드도 포함하므로 RAG 이미지를 다시 빌드해야 한다. 프론트 정적 파일만 바꾸는 배포와 구분한다.
+
+최신 코드 반영 후 HTTPS 구성에서 실행한다.
+
+```bash
+sudo docker compose -f compose.yaml -f compose.public.yaml up -d --build --wait rag
+sudo docker compose -f compose.yaml -f compose.public.yaml up -d --no-deps --no-build --force-recreate --wait nginx
+```
+
+기존 DB의 중복은 자동 삭제하지 않는다. 조회 명령·백업·분류 및 해시 검사 한계는 [분야별 자료 등록과 중복 점검](../docs/DOCUMENT_UPLOADS.md)을 따른다.

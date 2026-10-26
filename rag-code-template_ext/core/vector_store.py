@@ -56,18 +56,29 @@ class PgVectorStore:
         return dict(embedding_model=row[0], vector_dimension=row[1], manifest=row[2],
                     supplements=row[3], vectors=row[4])
 
-    def add_documents(self, docs, *, source_file=None):
+    def duplicate_upload(self, upload_hash):
+        with connect() as conn:
+            row = conn.execute(
+                "SELECT metadata->>'source_file' FROM rag_chunks WHERE collection=%s "
+                "AND metadata->>'upload_hash'=%s LIMIT 1", (self.collection, upload_hash)).fetchone()
+        return row[0] if row else None
+
+    def add_documents(self, docs, *, source_file=None, source_files=None):
         info = self.info()
         if info and info["manifest"].get("managed_by") == "law_pipeline":
             raise ValueError("법령 컬렉션은 law_pipeline build로 관리됩니다.")
         if info and (info["embedding_model"] != self.model or
                      info["manifest"].get("requested_dimensions") != self.dimensions):
             raise ValueError("기존 컬렉션의 임베딩 설정과 다릅니다.")
+        upload_hash = docs[0].metadata.get("upload_hash") if docs else None
+        if upload_hash and self.duplicate_upload(upload_hash):
+            return {"skipped": True, "message": "이미 등록된 동일 자료입니다."}
         vectors = self._client().embed_documents([d.page_content for d in docs])
-        return self.write_vectors(docs, vectors, mode="upload", source_file=source_file)
+        return self.write_vectors(docs, vectors, mode="upload", source_file=source_file,
+                                  source_files=source_files)
 
     def write_vectors(self, docs, vectors, *, mode="create", manifest=None,
-                      supplements=None, source_file=None):
+                      supplements=None, source_file=None, source_files=None):
         """Commit a whole collection or one uploaded file atomically.
 
         Embedding/validation finishes before existing rows are touched. A row
@@ -112,9 +123,20 @@ class PgVectorStore:
                     raise ValueError("법령 컬렉션은 law_pipeline build로 관리됩니다.")
                 if (current[0], current[1]) != (self.model, dimension):
                     raise ValueError("기존 컬렉션의 임베딩 모델·차원과 다릅니다.")
-                if source_file is not None:
+                upload_hash = docs[0].metadata.get("upload_hash")
+                if upload_hash and conn.execute(
+                    "SELECT 1 FROM rag_chunks WHERE collection=%s AND metadata->>'upload_hash'=%s LIMIT 1",
+                    (self.collection, upload_hash)).fetchone():
+                    return {"skipped": True, "message": "이미 등록된 동일 자료입니다."}
+                # Preserve collection metadata and supplements on incremental uploads.
+                result = {**current[2], **result}
+                if supplements is None:
+                    supplements = conn.execute("SELECT supplements FROM rag_collections WHERE name=%s",
+                                               (self.collection,)).fetchone()[0]
+                keys = source_files if source_files is not None else ([source_file] if source_file is not None else [])
+                if keys:
                     conn.execute("DELETE FROM rag_chunks WHERE collection=%s "
-                                 "AND metadata->>'source_file'=%s", (self.collection, source_file))
+                                 "AND metadata->>'source_file'=ANY(%s)", (self.collection, keys))
             else:
                 conn.execute("DELETE FROM rag_chunks WHERE collection=%s", (self.collection,))
             conn.execute("UPDATE rag_collections SET embedding_model=%s, vector_dimension=%s, "

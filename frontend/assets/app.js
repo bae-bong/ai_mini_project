@@ -6,7 +6,7 @@
     data: () => ({
       page, user: null, checking: true, busy: false, error: '', sessionError: '', health: null,
       healthError: '', loadingHealth: false, source: 'pdf', question: '',
-      submittedQuestion: '', answer: null, selectedFile: null, category: '노무',
+      submittedQuestion: '', answer: null, selectedFiles: [], category: '노무',
       uploadResult: null, managed: false,
       voiceSupported: VoiceChat.supported(),
       voice: { recordingState: 'idle', recordingSeconds: 0, voiceMessage: '', voiceError: '', speechLoading: false, speechError: '', audioUrl: '' },
@@ -113,6 +113,9 @@
         this.voiceController?.cancelRecording();
         this.voiceController?.resetSpeech();
         this.source = value;
+        this.selectedFiles = [];
+        this.uploadResult = null;
+        this.managed = false;
         this.error = '';
         this.answer = null;
         this.question = '';
@@ -166,29 +169,51 @@
       reviewText(reason) { return reason || '적용 조건·예외를 원문에서 확인하고, 개별 사안의 법적 판단은 노무사 등 전문가에게 확인해 주세요.'; },
       fileSize(size) { return `${(size / 1024 / 1024).toFixed(1)}MB`; },
       chooseFile(event) {
+        this.addFiles(event.target.files);
+        event.target.value = '';
+      },
+      dropFiles(event) { this.addFiles(event.dataTransfer.files); },
+      addFiles(files) {
+        if (this.busy || this.managed) return;
         this.error = '';
         this.uploadResult = null;
-        this.selectedFile = null;
-        const file = event.target.files[0];
-        if (!file) return;
-        if (!file.name.toLowerCase().endsWith('.pdf')) this.error = 'PDF 파일을 선택해 주세요.';
-        else if (!file.size || file.size > 20 * 1024 * 1024) this.error = '비어 있지 않은 20MB 이하의 파일을 선택해 주세요.';
-        else this.selectedFile = file;
-        if (!this.selectedFile) event.target.value = '';
+        for (const file of files) {
+          if (!file.name.toLowerCase().endsWith('.pdf') || !file.size || file.size > 20 * 1024 * 1024) {
+            this.error = '비어 있지 않은 PDF만 등록할 수 있어요. 파일당 최대 20MB예요.';
+            continue;
+          }
+          if (this.selectedFiles.length >= 20) { this.error = '한 번에 최대 20개까지 선택할 수 있어요.'; break; }
+          if (!this.selectedFiles.some(item => item.file.name === file.name)) {
+            this.selectedFiles.push({ file, status: '대기', message: '' });
+          }
+        }
       },
       async upload() {
-        if (!this.selectedFile || this.busy || this.managed) return;
+        if (!this.selectedFiles.length || this.busy || this.managed) return;
         this.busy = true;
         this.error = '';
         this.uploadResult = null;
         try {
-          const body = new FormData(); body.append('file', this.selectedFile); body.append('category', this.category);
-          this.uploadResult = await this.api('/api/rag/upload-paper', { method: 'POST', body });
-          this.selectedFile = null;
-          document.getElementById('document-file').value = '';
+          for (const item of this.selectedFiles.filter(item => ['대기', '실패'].includes(item.status))) {
+            item.status = '등록 중';
+            item.message = '';
+            try {
+              const body = new FormData();
+              body.append('file', item.file);
+              if (this.source === 'pdf') body.append('category', this.category);
+              const result = await this.api(`/api/rag/${this.source === 'pdf' ? 'upload-paper' : 'upload-notice'}`, { method: 'POST', body });
+              item.status = result.skipped ? '중복 제외' : '완료';
+              item.message = result.message;
+            } catch (error) {
+              item.status = '실패';
+              item.message = error.message;
+              if (error.status === 409) { this.managed = true; break; }
+              if (error.status === 401) break;
+            }
+          }
+          this.uploadResult = { message: '파일별 처리 결과를 확인해 주세요. 실패한 파일은 다시 등록할 수 있어요.' };
           await this.loadHealth();
-        } catch (error) { if (error.status === 409) this.managed = true; else this.error = error.message; }
-        finally { this.busy = false; }
+        } finally { this.busy = false; }
       },
     },
     mounted() {
