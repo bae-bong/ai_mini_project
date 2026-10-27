@@ -1,5 +1,38 @@
 # 다음 작업 세션 계획
 
+## 최신 인계 — 2026-10-26 관리자 기능 재배포
+
+이 절이 아래의 이전 음성 작업 계획보다 우선한다.
+
+- 로컬: develop, 75ae707. 관리자 기능은 c71b3cb로 develop에 병합됐다.
+- EC2: 사용자 출력 기준 develop/origin/develop = c71b3cb. 새 RAG 이미지 및 /admin의 실제 배포 완료는 미확인이다.
+- 완료 기능: 분야별 복수 PDF 등록·동일 파일 제외·저장 문서 목록·본문 미리보기·확인 후 삭제. /admin으로 직접 진입하며 일반 메뉴에 링크는 없다.
+- 권한: 관리자 역할 구분은 아직 없다. 현재 로그인 사용자는 주소와 API를 알면 문서를 관리할 수 있다.
+- 운영 확인: 백업은 중단돼 0바이트이며 유효하지 않다. STT의 OOM 종료는 커널 로그로 확인했다. tiny 설정 적용과 유효한 OpenAI 키로 적재 성공은 확인해야 한다.
+- Codex 재개: `codex resume 01a166ec-6b45-7620-9d9c-dfa7b3433eff`.
+
+### 먼저 할 일
+
+1. Mac에서 SSH 접속 후 EC2의 `~/ai_mini_project`로 이동한다. Docker 명령을 Mac 홈에서 실행하지 않는다.
+2. git 상태와 최신 develop 커밋을 확인한다. 그다음 EC2에서 아래 명령을 하나씩 실행하고 성공을 확인한다.
+
+```bash
+cd ~/ai_mini_project
+sudo docker compose -f compose.yaml -f compose.public.yaml up -d --build --wait rag
+sudo docker compose -f compose.yaml -f compose.public.yaml up -d --no-deps --no-build --force-recreate --wait nginx
+sudo docker compose -f compose.yaml -f compose.public.yaml ps
+curl -fsS https://skala-ai.duckdns.org/api/rag/health
+```
+
+3. 로그인 후 https://skala-ai.duckdns.org/admin 에 접속해 목록·본문·업로드를 확인한다. 실제 삭제는 대상과 공유 영향을 확인하고 수행한다. 운영 삭제는 아직 하지 않았다.
+4. 백업 대기 원인을 진단해 정상 백업을 확보한다. 백업은 재배포의 기술적 필수 조건은 아니며 0바이트 파일은 사용할 수 없다. DB 볼륨을 제거하지 않는다.
+5. 관리자 역할 제한, STT 메모리 사용량, 실제 RAG/TTS API 성공 여부를 이어서 확인한다.
+
+세부 이력은 [WORK_LOG](WORK_LOG.md), 관리 범위는 [자료 등록 안내](DOCUMENT_UPLOADS.md), 실행 절차는 [배포 안내](../deploy/README.md)에 있다.
+
+## 이전 음성 작업 계획 — 참고용
+
+
 작성: 2026-10-26 00시대(한국 시간). 밤 작업 이후 다시 시작할 때의 인계 문서다.
 
 ## 시작 지점

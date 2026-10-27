@@ -176,3 +176,37 @@
 - 프론트 14개, API/DB 11개, 기존 법령 14개로 총 39개 테스트가 통과했고 선택 FAISS 이관 1개는 제외했다. 별도 임시 Compose에서 ACME·HTTPS·Secure 쿠키·/admin 페이지 검증도 통과했다.
 - 별도 admin_documents_test DB에 합성 문서만 넣고, 테스트 JWT를 사용해 실제 API·DB와 브라우저를 연결했다. 법령 본문 확인, 특정 법령만 삭제하고 다른 법령 보존, 공고 개요·본문 2개 동시 삭제, web_index=false 갱신, 일반 메뉴 링크 제거와 /documents 404를 확인했다. 유료 API와 실제 EC2는 사용하지 않았다.
 - 테스트 DB와 임시 RAG·Nginx는 정리했다. 배포에는 RAG 재빌드·Nginx 재생성이 필요하며 아직 커밋·push·develop 병합·EC2 반영은 하지 않았다.
+
+
+## 2026-10-26 — 관리자 기능 병합 및 EC2 재배포 인계
+
+### 확인된 상태
+
+- 현재 로컬 브랜치는 develop, HEAD는 75ae707(Reorganize project documentation diagrams)이다. 문서 저장 전 작업 트리는 깨끗했다.
+- 관리자 문서 기능은 c71b3cb(feat/admin-documents)로 develop에 반영됐다. 앞선 “미커밋·미병합” 기록은 당시 상태이며 현재에는 해당하지 않는다.
+- 사용자가 보낸 EC2 로그에서 develop과 origin/develop이 c71b3cb인 것을 확인했다. 서버 최신 pull 이후 RAG 재빌드·관리 화면 재배포 완료 여부는 아직 확인하지 못했다.
+- 최종 컨테이너 상태 출력은 auth/db/nginx/rag/voice가 실행 중이고 db/nginx/rag/voice가 healthy였다. Docker Compose ps의 종료 코드는 0이었다. healthy만으로 신규 관리자 API나 유료 API의 정상 동작을 보장하지 않는다.
+
+### 운영 중 확인한 문제
+
+- PDF 적재 500 응답은 OpenAI invalid_api_key(상위 API 401)였다. 키 수정·컨테이너 재생성 방법을 안내했다. 실제 유효 키로 PDF 적재가 성공했는지는 미확인이다. 비밀값은 기록하지 않는다.
+- 음성 인식 POST /api/voice/stt/의 502 발생 시각(00:33:14 UTC)에 커널의 global OOM과 uvicorn 강제 종료가 일치했다. WHISPER_MODEL=tiny로 축소하고 voice만 재생성하는 방법을 안내했다. 실제 적용·성공 여부는 미확인이다.
+- 자료 관리 빈 화면은 사용자 세션에서 재현하지 못했다. 새 접속 및 인증 대역에서는 표시됐다. 파일 해시 URL과 Nginx no-cache로 캐시 혼용 방지를 구현했으나 실제 사용자 오류 원인을 확정하지는 않았다.
+- Nginx 재생성 중 SSH가 Broken pipe로 종료된 적이 있다. 이후 상태 출력에서는 Nginx가 healthy였다. SSH 종료 자체를 서비스 실패로 단정하지 않는다.
+- pg_dump 백업이 출력 없이 대기했고 사용자가 Ctrl+C로 중단했다. 종료 코드 1, 백업 파일은 0바이트였다. 05:44·05:45 UTC의 파일은 복구 가능한 백업으로 간주하지 않는다. 대기 원인은 미확인이다.
+- 백업은 재배포 명령의 기술적 필수 조건이 아니다. 현재 변경에는 DB 스키마 변경이 없고 RAG/Nginx만 재생성하면 기존 DB 볼륨이 유지된다. 실제 문서 삭제 전에는 정상 백업 확보를 권장한다.
+
+### 다음 작업
+
+1. EC2에서 브랜치·커밋·컨테이너 상태를 다시 확인한다. 공개 HTTPS 모드이므로 compose.yaml과 compose.public.yaml을 항상 함께 사용한다.
+2. RAG를 재빌드하고 Nginx를 재생성한다. 실행 명령은 deploy/README.md와 docs/NEXT_STEPS.md를 따른다. DB 볼륨을 지우거나 down -v를 실행하지 않는다.
+3. 로그인 후 /admin에서 실제 문서 목록·본문 확인 및 복수 업로드를 검증한다. 운영 문서 삭제는 아직 수행하지 않았다. /documents는 404, 일반 메뉴 관리 링크는 제거된 것이 의도된 동작이다.
+4. 관리자 역할 구분을 후속 구현한다. 현재 /admin과 관리 API는 로그인만 요구하므로 주소를 아는 로그인 사용자가 접근할 수 있다.
+5. 백업 대기의 원인을 제한 시간 내 명령과 DB 활동·잠금으로 확인하고 유효한 백업을 확보한다.
+6. tiny 적용 여부와 STT 중 메모리 사용량을 확인한다. 필요 시 모델·인스턴스 자원을 조정한다. 로컬 이미지 빌드·전송 방식은 deploy/LOCAL_IMAGE_DEPLOY.md에 보관된 후속 작업이다.
+
+### 접속 및 세션
+
+- 서비스: https://skala-ai.duckdns.org, 관리 화면: /admin. SSH는 Mac에서 실행하고, Docker·백업 명령은 ubuntu@ip-... 프롬프트의 EC2에서 실행한다.
+- EC2는 기존 VPC를 사용 중이다. 새 VPC를 별도로 만드는 작업은 계획하지 않았다.
+- Codex 세션 ID: 01a166ec-6b45-7620-9d9c-dfa7b3433eff. 재개: codex resume 01a166ec-6b45-7620-9d9c-dfa7b3433eff.
